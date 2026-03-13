@@ -319,7 +319,7 @@ export default function AlphaLoopLanding() {
           <h2 className="text-4xl md:text-6xl font-black uppercase tracking-tighter text-white mb-6">Initialize Run</h2>
           <p className="text-sm font-mono text-zinc-500 mb-12">Open source. MIT licensed. Runs entirely on your hardware.</p>
           <div className="flex flex-col sm:flex-row justify-center gap-6">
-            <a href="https://github.com" className="inline-flex items-center justify-center px-8 py-4 text-sm font-mono font-bold tracking-widest uppercase text-black bg-white hover:bg-zinc-200 transition-all">
+            <a href="https://github.com/MarkCodering/AlphaLoop" className="inline-flex items-center justify-center px-8 py-4 text-sm font-mono font-bold tracking-widest uppercase text-black bg-white hover:bg-zinc-200 transition-all">
               <Github className="w-5 h-5 mr-3" />
               Source Code
             </a>
