@@ -124,6 +124,8 @@ def status() -> None:
 
     cfg = Config()
 
+    from alphaloop.mcp import read_mcp_connections
+
     table = Table(title="AlphaLoop Config", show_header=False)
     table.add_column("Key", style="bold cyan")
     table.add_column("Value")
@@ -135,7 +137,19 @@ def status() -> None:
     table.add_row("Thread ID", cfg.thread_id)
     table.add_row("Checkpoint DB", str(cfg.checkpoint_db))
     table.add_row("Work dir", str(cfg.work_dir))
-    table.add_row("Sandbox", str(cfg.sandbox_enabled))
+
+    sandbox_val = "disabled"
+    if cfg.sandbox_enabled:
+        sandbox_val = "docker (--network none, 512MB RAM)" if cfg.sandbox_use_docker else "restricted-local (allowlist + ulimits)"
+    table.add_row("Sandbox", sandbox_val)
+
+    mcp_connections = read_mcp_connections(cfg)
+    if mcp_connections:
+        table.add_row("MCP config", str(cfg.mcp_config))
+        table.add_row("MCP servers", ", ".join(mcp_connections.keys()))
+    else:
+        table.add_row("MCP servers", "none (add ~/.alphaloop/mcp.json to enable)")
+
     console.print(table)
 
 

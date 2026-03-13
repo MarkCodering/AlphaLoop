@@ -77,7 +77,7 @@ async def create_agent(
 
         from alphaloop.mcp import load_mcp_tools
 
-        mcp_tools = await load_mcp_tools(cfg)
+        mcp_tools = await load_mcp_tools(cfg, stack)
 
         graph = create_deep_agent(
             model=model,

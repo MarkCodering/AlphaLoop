@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import AsyncExitStack
 from typing import Any
 
 from langchain_core.tools import BaseTool
@@ -13,13 +14,31 @@ from alphaloop.logger import get_logger, log_event
 logger = get_logger(__name__)
 
 
-async def load_mcp_tools(config: Config) -> list[BaseTool]:
-    """Return LangChain tools from all configured MCP servers.
+def read_mcp_connections(config: Config) -> dict[str, Any]:
+    """Parse the MCP config file and return the connections dict (or empty dict)."""
+    if config.mcp_config is None:
+        return {}
+    if not config.mcp_config.exists():
+        return {}
+    try:
+        return json.loads(config.mcp_config.read_text())
+    except Exception as exc:
+        logger.error("mcp.load: failed to parse %s: %s", config.mcp_config, exc)
+        return {}
 
-    Reads server definitions from ``config.mcp_config`` (a JSON file mapping
-    server names to connection specs accepted by ``MultiServerMCPClient``).
 
-    Returns an empty list if no config is set or the file is missing.
+async def load_mcp_tools(config: Config, stack: AsyncExitStack) -> list[BaseTool]:
+    """Connect to all configured MCP servers and return their LangChain tools.
+
+    The ``MultiServerMCPClient`` is entered into *stack* so its sessions stay
+    alive for the full lifetime of the agent (closed when ``stack.aclose()`` is
+    called on shutdown).
+
+    Reads server definitions from ``config.mcp_config`` — a JSON file mapping
+    server names to connection specs accepted by ``MultiServerMCPClient``.
+
+    Returns an empty list if no config is set, the file is missing, or all
+    servers fail to connect.
 
     Example ``~/.alphaloop/mcp.json``::
 
@@ -35,27 +54,18 @@ async def load_mcp_tools(config: Config) -> list[BaseTool]:
           }
         }
     """
-    if config.mcp_config is None:
-        return []
-
-    if not config.mcp_config.exists():
-        logger.warning("mcp.load: config file not found: %s", config.mcp_config)
-        return []
-
-    try:
-        connections: dict[str, Any] = json.loads(config.mcp_config.read_text())
-    except Exception as exc:
-        logger.error("mcp.load: failed to parse %s: %s", config.mcp_config, exc)
-        return []
-
+    connections = read_mcp_connections(config)
     if not connections:
         return []
 
     from langchain_mcp_adapters.client import MultiServerMCPClient
 
     try:
-        async with MultiServerMCPClient(connections) as client:
-            tools = await client.get_tools()
+        client = MultiServerMCPClient(connections)
+        # Enter into the caller's stack — keeps all server sessions open until
+        # the agent shuts down.
+        await stack.enter_async_context(client)
+        tools = await client.get_tools()
         log_event(
             logger,
             "mcp.loaded",
