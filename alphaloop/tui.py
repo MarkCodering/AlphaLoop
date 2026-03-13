@@ -98,6 +98,11 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/sandbox off",      "Disable sandbox"),
     ("/sandbox docker",   "Switch to Docker isolation (--network none, 512MB)"),
     ("/sandbox local",    "Switch to restricted-local sandbox"),
+    ("/skills",           "List available agent skills"),
+    ("/skills on",        "Enable a skill  · /skills on <name>"),
+    ("/skills off",       "Disable a skill  · /skills off <name>"),
+    ("/mcp auth",         "Authenticate with an MCP server via OAuth  · /mcp auth <name>"),
+    ("/mcp deauth",       "Remove stored OAuth token  · /mcp deauth <name>"),
     ("/thread",           "Show current thread ID"),
 ]
 
@@ -656,8 +661,18 @@ class AlphaLoopApp(App[None]):
             self._cmd_mcp_add(parts[2:] if len(parts) > 2 else [])
         elif two == "/mcp remove":
             self._cmd_mcp_remove(parts[2] if len(parts) > 2 else "")
+        elif two == "/mcp auth":
+            self._cmd_mcp_auth(parts[2] if len(parts) > 2 else "")
+        elif two == "/mcp deauth":
+            self._cmd_mcp_deauth(parts[2] if len(parts) > 2 else "")
         elif cmd == "/mcp":
             self._cmd_mcp_list()
+        elif two == "/skills on":
+            self._cmd_skills_on(parts[2] if len(parts) > 2 else "")
+        elif two == "/skills off":
+            self._cmd_skills_off(parts[2] if len(parts) > 2 else "")
+        elif cmd == "/skills":
+            self._cmd_skills_list()
         elif two == "/sandbox on":
             self._cmd_sandbox_set(enabled=True, docker=False)
         elif two == "/sandbox off":
@@ -800,6 +815,98 @@ class AlphaLoopApp(App[None]):
 
         self.query_one("#status-bar", StatusBar).mcp_count = len(connections)
         self._append_chat("sys", f"Removed MCP server '{name}' — restarting…")
+        self.post_message(AgentRestart())
+
+    # ------------------------------------------------------------------
+    # MCP OAuth commands
+    # ------------------------------------------------------------------
+
+    def _cmd_mcp_auth(self, name: str) -> None:
+        if not name:
+            self._append_chat("sys", "Usage: /mcp auth <server-name>")
+            return
+        connections = _read_mcp_file(self._cfg)
+        if name not in connections:
+            self._append_chat("sys", f"Server '{name}' not found — add it first with /mcp add")
+            return
+        spec = connections[name]
+        url  = spec.get("url") or spec.get("command", "")
+        if not url.startswith("http"):
+            self._append_chat("sys", "OAuth is only supported for http/sse MCP servers.")
+            return
+        self._do_mcp_auth(name, url)
+
+    @work(exclusive=False)
+    async def _do_mcp_auth(self, name: str, url: str) -> None:
+        from alphaloop.mcp_oauth import run_oauth_flow
+
+        async def _progress(msg: str) -> None:
+            self._append_chat("sys", msg)
+
+        token = await run_oauth_flow(name, url, on_progress=_progress)
+        if token:
+            self._append_chat("sys", f"Authenticated with '{name}'. Restarting agent…")
+            self.post_message(AgentRestart())
+        else:
+            self._append_chat("sys", "OAuth flow failed or was cancelled.")
+
+    def _cmd_mcp_deauth(self, name: str) -> None:
+        if not name:
+            self._append_chat("sys", "Usage: /mcp deauth <server-name>")
+            return
+        from alphaloop.mcp_oauth import delete_token, get_token
+        if not get_token(name):
+            self._append_chat("sys", f"No stored token for '{name}'.")
+            return
+        delete_token(name)
+        self._append_chat("sys", f"Token removed for '{name}'. Restarting…")
+        self.post_message(AgentRestart())
+
+    # ------------------------------------------------------------------
+    # Skills commands
+    # ------------------------------------------------------------------
+
+    def _cmd_skills_list(self) -> None:
+        from alphaloop.skills import REGISTRY, load_enabled
+        enabled = load_enabled()
+        log = self.query_one("#chat-log", RichLog)
+        log.write(Text("── Skills ───────────────────────────────────────\n", style="bright_yellow"))
+        for skill_name, info in REGISTRY.items():
+            active = skill_name in enabled
+            status_style = "bright_green" if active else "bright_black"
+            status_label = "ON " if active else "OFF"
+            row = Text()
+            row.append(f"  [{status_label}] ", style=status_style)
+            row.append(f"{skill_name:<18}", style="cyan" if active else "bright_black")
+            row.append(info.description + "\n", style="white" if active else "bright_black")
+            log.write(row)
+        log.write(Text(
+            "  Use /skills on <name> or /skills off <name> to toggle.\n",
+            style="bright_black",
+        ))
+
+    def _cmd_skills_on(self, name: str) -> None:
+        if not name:
+            self._append_chat("sys", "Usage: /skills on <skill-name>")
+            self._cmd_skills_list()
+            return
+        from alphaloop.skills import enable_skill, REGISTRY
+        if name not in REGISTRY:
+            self._append_chat("sys", f"Unknown skill '{name}'. Type /skills to see available skills.")
+            return
+        enable_skill(name)
+        self._append_chat("sys", f"Skill '{name}' enabled — restarting agent…")
+        self.post_message(AgentRestart())
+
+    def _cmd_skills_off(self, name: str) -> None:
+        if not name:
+            self._append_chat("sys", "Usage: /skills off <skill-name>")
+            return
+        from alphaloop.skills import disable_skill
+        if not disable_skill(name):
+            self._append_chat("sys", f"Skill '{name}' was not enabled.")
+            return
+        self._append_chat("sys", f"Skill '{name}' disabled — restarting agent…")
         self.post_message(AgentRestart())
 
     # ------------------------------------------------------------------

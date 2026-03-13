@@ -58,10 +58,21 @@ async def load_mcp_tools(config: Config, stack: AsyncExitStack) -> list[BaseTool
     if not connections:
         return []
 
+    # Inject stored OAuth tokens as Bearer headers for each server
+    from alphaloop.mcp_oauth import get_auth_headers
+    authed: dict[str, Any] = {}
+    for name, spec in connections.items():
+        merged = dict(spec)
+        headers = get_auth_headers(name)
+        if headers:
+            existing = merged.get("headers", {}) or {}
+            merged["headers"] = {**existing, **headers}
+        authed[name] = merged
+
     from langchain_mcp_adapters.client import MultiServerMCPClient
 
     try:
-        client = MultiServerMCPClient(connections)
+        client = MultiServerMCPClient(authed)
         # Enter into the caller's stack — keeps all server sessions open until
         # the agent shuts down.
         await stack.enter_async_context(client)
