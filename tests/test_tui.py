@@ -128,14 +128,28 @@ async def test_mcp_add_accepts_quoted_json_spec_and_preserves_wrapper(
 async def test_set_provider_and_key_commands_update_config(stub_runner: None) -> None:
     cfg = Config(provider="ollama", model="lfm2.5-thinking:1.2b")
     app = AlphaLoopApp(config=cfg)
+    called = {"value": False}
+
+    def _open_prompt() -> None:
+        called["value"] = True
 
     async with app.run_test():
         app.post_message = lambda message: None
+        app._open_api_key_prompt = _open_prompt
         app._handle_slash_command("/set provider openai")
-        app._handle_slash_command("/set key sk-test-key")
+        app._handle_slash_command("/set key")
 
     assert cfg.provider == "openai"
-    assert cfg.openai_api_key == "sk-test-key"
+    assert called["value"] is True
+
+
+def test_apply_provider_key_updates_openai_config() -> None:
+    app = AlphaLoopApp(config=Config(provider="openai"))
+
+    ok = app._apply_provider_key("sk-test-key")
+
+    assert ok is True
+    assert app._cfg.openai_api_key == "sk-test-key"
 
 
 def test_unknown_command_suggests_closest(stub_runner: None) -> None:
@@ -205,3 +219,18 @@ def test_set_key_without_token_opens_prompt_for_non_ollama(monkeypatch: pytest.M
     app._cmd_set_key("")
 
     assert called["value"] is True
+
+
+def test_set_key_with_inline_token_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = AlphaLoopApp(config=Config(provider="openai"))
+    called = {"value": False}
+
+    def _open_prompt() -> None:
+        called["value"] = True
+
+    monkeypatch.setattr(app, "_open_api_key_prompt", _open_prompt)
+
+    app._cmd_set_key("sk-inline-unsafe")
+
+    assert called["value"] is False
+    assert app._cfg.openai_api_key is None

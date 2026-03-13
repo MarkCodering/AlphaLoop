@@ -492,6 +492,7 @@ class ApiKeyScreen(ModalScreen[str | None]):
     @on(Input.Submitted, "#apikey-input")
     def on_submit(self, event: Input.Submitted) -> None:
         token = event.value.strip()
+        self.query_one("#apikey-input", Input).value = ""
         self.dismiss(token or None)
 
     def action_dismiss_none(self) -> None:
@@ -1158,7 +1159,7 @@ class AlphaLoopApp(App[None]):
             "Ctrl+E: export conversation",
             "Type '/': open inline command suggestions",
             "Use PgUp/PgDn to scroll long slash-command lists",
-            "Use '/set key' (without token) for secure API key prompt",
+            "Use '/set key' for secure masked API key prompt",
             "Use '/provider' and '/set provider <name>' for runtime model routing",
         ]
         self._append_chat("sys", "Shortcuts:\n- " + "\n- ".join(tips))
@@ -1294,8 +1295,19 @@ class AlphaLoopApp(App[None]):
         self.post_message(AgentRestart())
 
     def _cmd_set_key(self, token: str) -> None:
+        if token:
+            self._append_chat(
+                "sys",
+                "Inline API keys are disabled for security. Use /set key to open the secure prompt.",
+            )
+            return
+
+        self._open_api_key_prompt()
+
+    def _apply_provider_key(self, token: str) -> bool:
+        token = token.strip()
         if not token:
-            self._open_api_key_prompt()
+            self._append_chat("sys", "API key cannot be empty.")
             return
 
         if self._cfg.provider == "openai":
@@ -1308,10 +1320,11 @@ class AlphaLoopApp(App[None]):
             self._cfg.ollama_api_key = token
         else:
             self._append_chat("sys", "Provider 'ollama' does not require an API key.")
-            return
+            return False
 
         self._append_chat("sys", f"API key updated for provider={self._cfg.provider}  restarting agent…")
         self.post_message(AgentRestart())
+        return True
 
     def _open_api_key_prompt(self) -> None:
         if self._cfg.provider == "ollama":
@@ -1320,7 +1333,7 @@ class AlphaLoopApp(App[None]):
 
         def _on_submit(token: str | None) -> None:
             if token:
-                self._cmd_set_key(token)
+                self._apply_provider_key(token)
             else:
                 self._append_chat("sys", "API key update cancelled.")
 
