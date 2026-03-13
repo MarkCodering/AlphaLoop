@@ -203,9 +203,8 @@ class ChatLog(RichLog):
 class HistoryInput(Input):
     """Input widget with ↑/↓ message history navigation.
 
-    Overrides ``_on_key`` so that Up/Down are intercepted *before* Textual's
-    Input handler processes them (which would otherwise consume or ignore them
-    without bubbling to the App).
+    When the slash-command preview is visible, the same keys navigate that
+    preview instead of chat history.
     """
 
     def __init__(self, *args, **kwargs) -> None:
@@ -221,18 +220,23 @@ class HistoryInput(Input):
         self._history_idx = -1
         self._history_draft = ""
 
-    async def _on_key(self, event: Key) -> None:
-        if event.key == "up":
+    def key_up(self, event: Key) -> None:
+        preview = self.app.query_one("#cmd-preview", CommandPreview)
+        if preview.display:
+            preview.move_up()
+        else:
             self._go_up()
-            event.prevent_default()
-            event.stop()
-            return
-        if event.key == "down":
+        event.prevent_default()
+        event.stop()
+
+    def key_down(self, event: Key) -> None:
+        preview = self.app.query_one("#cmd-preview", CommandPreview)
+        if preview.display:
+            preview.move_down()
+        else:
             self._go_down()
-            event.prevent_default()
-            event.stop()
-            return
-        await super()._on_key(event)
+        event.prevent_default()
+        event.stop()
 
     def _go_up(self) -> None:
         if not self._history:
