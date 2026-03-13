@@ -119,7 +119,7 @@ export default function AlphaLoopLanding() {
             <a href="https://github.com/langchain-ai/deepagents" className="hover:text-zinc-100 transition-colors">Docs</a>
           </div>
           <div className="flex items-center space-x-6">
-            <a href="https://github.com" className="text-zinc-500 hover:text-white transition-colors">
+            <a href="https://github.com/MarkCodering/AlphaLoop" className="text-zinc-500 hover:text-white transition-colors">
               <Github className="w-5 h-5" />
             </a>
             <button className="hidden md:inline-flex items-center justify-center px-6 py-2.5 text-xs font-mono font-bold tracking-widest uppercase text-black bg-zinc-100 hover:bg-white transition-colors">
