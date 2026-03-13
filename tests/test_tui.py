@@ -154,3 +154,31 @@ def test_command_registry_includes_palette_and_provider_commands() -> None:
     assert "/palette" in names
     assert "/provider" in names
     assert "/providers" in names
+
+
+def test_copy_chat_command_calls_copy_chat(stub_runner: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    app = AlphaLoopApp(config=Config())
+    called = {"value": False}
+
+    def _copy_chat() -> None:
+        called["value"] = True
+
+    monkeypatch.setattr(app, "action_copy_chat", _copy_chat)
+
+    app._handle_slash_command("/copy chat")
+
+    assert called["value"] is True
+
+
+def test_paste_command_calls_paste_to_input(stub_runner: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    app = AlphaLoopApp(config=Config())
+    called = {"value": False}
+
+    def _paste() -> None:
+        called["value"] = True
+
+    monkeypatch.setattr(app, "action_paste_to_input", _paste)
+
+    app._handle_slash_command("/paste")
+
+    assert called["value"] is True

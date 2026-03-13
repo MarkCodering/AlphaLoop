@@ -114,6 +114,8 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/mcp auth",         "Authenticate with an MCP server via OAuth  · /mcp auth <name>"),
     ("/mcp deauth",       "Remove stored OAuth token  · /mcp deauth <name>"),
     ("/copy",             "Copy last AI response to clipboard  (also Ctrl+Y)"),
+    ("/copy chat",        "Copy full chat transcript to clipboard"),
+    ("/paste",            "Paste clipboard text into the input box"),
     ("/export",           "Open full conversation in a selectable text view"),
     ("/thread",           "Show current thread ID"),
     ("/tips",             "Show productivity shortcuts"),
@@ -807,6 +809,8 @@ class AlphaLoopApp(App[None]):
         Binding("ctrl+r", "restart_agent",   "Restart"),
         Binding("ctrl+m", "open_models",     "Models"),
         Binding("ctrl+y", "copy_last",       "Copy"),
+        Binding("ctrl+shift+c", "copy_chat", "Copy Chat"),
+        Binding("ctrl+shift+v", "paste_to_input", "Paste"),
         Binding("ctrl+e", "export_chat",     "Export"),
         Binding("escape", "dismiss_preview", show=False),
     ]
@@ -929,6 +933,10 @@ class AlphaLoopApp(App[None]):
             if event.key == "ctrl+c":
                 self.action_copy_last()
                 event.prevent_default()
+                return
+            if event.key == "ctrl+shift+c":
+                self.action_copy_chat()
+                event.prevent_default()
             return
 
     # ------------------------------------------------------------------
@@ -967,6 +975,8 @@ class AlphaLoopApp(App[None]):
             self._open_model_picker()
         elif cmd == "/copy":
             self.action_copy_last()
+        elif cmd == "/paste":
+            self.action_paste_to_input()
         elif cmd == "/export":
             self.action_export_chat()
         elif cmd == "/thread":
@@ -979,6 +989,8 @@ class AlphaLoopApp(App[None]):
                 self._cmd_set_model(name)
             else:
                 self._open_model_picker()
+        elif two == "/copy chat":
+            self.action_copy_chat()
         elif two == "/set provider":
             name = parts[2] if len(parts) > 2 else ""
             if name:
@@ -1491,6 +1503,14 @@ class AlphaLoopApp(App[None]):
                     self._append_chat("sys", "Clipboard unavailable — see chat log for text.")
                 return
         self._append_chat("sys", "No agent response to copy yet.")
+
+    def action_copy_chat(self) -> None:
+        """Copy full conversation transcript to the system clipboard."""
+        transcript = self._build_plain_transcript()
+        if self._clipboard_copy(transcript):
+            self._append_chat("sys", "Copied full chat transcript to clipboard.")
+        else:
+            self._append_chat("sys", "Clipboard unavailable — use /export to copy manually.")
 
 
     # ------------------------------------------------------------------
