@@ -44,6 +44,26 @@ ollama pull lfm2.5-thinking:1.2b
 ./run.sh start      # headless 24/7 mode
 ```
 
+## Windows Setup (PowerShell)
+
+Use the included script to prepare a Windows environment:
+
+```powershell
+# from the project root
+./setup-windows.ps1
+```
+
+Common options:
+
+```powershell
+./setup-windows.ps1 -Provider openai -Model gpt-4.1-mini
+./setup-windows.ps1 -Provider ollama -Model gemma3:4b
+./setup-windows.ps1 -SkipUvSync
+```
+
+The script checks Python 3.12+, installs `uv` if missing, runs `uv sync`, and
+for `-Provider ollama` verifies Ollama + optionally pulls the selected model.
+
 ---
 
 ## CLI
