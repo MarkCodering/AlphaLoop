@@ -183,12 +183,16 @@ class StatusBar(Static):
             mode = "docker" if self._cfg.sandbox_use_docker else "local"
             t.append("  │  sandbox=", style="bright_black")
             t.append(mode,            style="magenta")
+        t.append("  │  mcp=", style="bright_black")
         if self.mcp_count:
-            t.append("  │  mcp=",          style="bright_black")
-            t.append(str(self.mcp_count),  style="bright_green")
+            t.append(str(self.mcp_count), style="bright_green")
+            t.append(" tools=", style="bright_black")
             if self.mcp_tools:
-                t.append(" tools=", style="bright_black")
                 t.append(str(self.mcp_tools), style="bright_green")
+            else:
+                t.append("0", style="bright_red")
+        else:
+            t.append("none", style="bright_black")
         return t
 
 
