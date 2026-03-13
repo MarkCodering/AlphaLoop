@@ -19,12 +19,33 @@ def _default_mcp_config() -> Path | None:
 class Config:
     """Central config read from environment variables with sane defaults."""
 
-    # Ollama model to use
+    # Model provider to use: ollama | openai | anthropic | gemini | ollama_cloud
+    provider: str = field(default_factory=lambda: os.getenv("ALPHALOOP_PROVIDER", "ollama"))
+
+    # Model to use (provider-specific model identifier)
     model: str = field(default_factory=lambda: os.getenv("ALPHALOOP_MODEL", "lfm2.5-thinking:1.2b"))
 
-    # Ollama base URL
+    # Local Ollama base URL
     ollama_base_url: str = field(
         default_factory=lambda: os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    )
+
+    # OpenAI configuration
+    openai_api_key: str | None = field(default_factory=lambda: os.getenv("OPENAI_API_KEY"))
+    openai_base_url: str | None = field(default_factory=lambda: os.getenv("OPENAI_BASE_URL"))
+
+    # Anthropic configuration
+    anthropic_api_key: str | None = field(default_factory=lambda: os.getenv("ANTHROPIC_API_KEY"))
+
+    # Gemini configuration (Google AI Studio)
+    gemini_api_key: str | None = field(
+        default_factory=lambda: os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    )
+
+    # Ollama Cloud configuration (OpenAI-compatible endpoint)
+    ollama_api_key: str | None = field(default_factory=lambda: os.getenv("OLLAMA_API_KEY"))
+    ollama_cloud_base_url: str = field(
+        default_factory=lambda: os.getenv("OLLAMA_CLOUD_BASE_URL", "https://ollama.com")
     )
 
     # Heartbeat interval in seconds
@@ -95,6 +116,20 @@ class Config:
     )
 
     def __post_init__(self) -> None:
+        aliases = {
+            "google": "gemini",
+            "google-genai": "gemini",
+            "ollama-cloud": "ollama_cloud",
+        }
+        self.provider = aliases.get(self.provider.lower(), self.provider.lower())
+
+        allowed = {"ollama", "openai", "anthropic", "gemini", "ollama_cloud"}
+        if self.provider not in allowed:
+            raise ValueError(
+                f"Unsupported ALPHALOOP_PROVIDER '{self.provider}'. "
+                "Use one of: ollama, openai, anthropic, gemini, ollama_cloud."
+            )
+
         self.checkpoint_db.parent.mkdir(parents=True, exist_ok=True)
         self.work_dir.mkdir(parents=True, exist_ok=True)
 

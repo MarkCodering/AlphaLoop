@@ -91,8 +91,13 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/clear",            "Clear chat history"),
     ("/status",           "Show config & heartbeat state"),
     ("/restart",          "Restart the agent"),
+    ("/provider",         "Show current provider"),
+    ("/providers",        "List supported providers"),
     ("/models",           "Open interactive model picker (Ollama)"),
+    ("/set provider",     "Switch provider  · /set provider <name>"),
     ("/set model",        "Switch Ollama model  · /set model <name>"),
+    ("/set endpoint",     "Set provider endpoint  · /set endpoint <url>"),
+    ("/set key",          "Set provider API key  · /set key <token>"),
     ("/mcp list",         "List connected MCP servers"),
     ("/mcp add",          "Add MCP server  · /mcp add <name> <url|json-spec>  [transport=http]"),
     ("/mcp remove",       "Remove MCP server  · /mcp remove <name>"),
@@ -121,16 +126,21 @@ class AppHeader(Static):
     """Brand header — logo + model + thread (updated on restart)."""
 
     model_name: reactive[str] = reactive("")
+    provider_name: reactive[str] = reactive("")
 
     def __init__(self, config: Config, **kwargs) -> None:
         super().__init__(**kwargs)
         self._cfg = config
         self.model_name = config.model
+        self.provider_name = config.provider
 
     def render(self) -> Text:
         t = Text(overflow="ellipsis", no_wrap=True)
         t.append("  ◉ ", style="bold bright_yellow")
         t.append("ALPHALOOP", style="bold white")
+        t.append("  │  ", style="bright_black")
+        t.append("provider=", style="bright_black")
+        t.append(self.provider_name, style="magenta")
         t.append("  │  ", style="bright_black")
         t.append("model=", style="bright_black")
         t.append(self.model_name, style="cyan")
@@ -813,6 +823,10 @@ class AlphaLoopApp(App[None]):
             self._cmd_status()
         elif cmd == "/restart":
             self._cmd_restart()
+        elif cmd == "/provider":
+            self._cmd_provider()
+        elif cmd == "/providers":
+            self._cmd_providers()
         elif cmd in ("/models", "/model"):
             self._open_model_picker()
         elif cmd == "/copy":
@@ -827,6 +841,18 @@ class AlphaLoopApp(App[None]):
                 self._cmd_set_model(name)
             else:
                 self._open_model_picker()
+        elif two == "/set provider":
+            name = parts[2] if len(parts) > 2 else ""
+            if name:
+                self._cmd_set_provider(name)
+            else:
+                self._cmd_providers()
+        elif two == "/set endpoint":
+            endpoint = parts[2] if len(parts) > 2 else ""
+            self._cmd_set_endpoint(endpoint)
+        elif two == "/set key":
+            token = parts[2] if len(parts) > 2 else ""
+            self._cmd_set_key(token)
         elif two == "/mcp list":
             self._cmd_mcp_list()
         elif two == "/mcp add":
@@ -874,7 +900,10 @@ class AlphaLoopApp(App[None]):
         mcp = read_mcp_connections(self._cfg)
         log = self.query_one("#chat-log", ChatLog)
         rows = [
+            ("provider",   self._cfg.provider),
             ("model",      self._cfg.model),
+            ("endpoint",   self._provider_endpoint()),
+            ("api key",    "set" if self._provider_key_present() else "missing"),
             ("thread",     self._cfg.thread_id),
             ("hb tick",    str(hb.tick)),
             ("hb uptime",  f"{hb.uptime:.0f}%"),
@@ -917,7 +946,39 @@ class AlphaLoopApp(App[None]):
         self._append_chat("sys", "Restarting agent…")
         self.post_message(AgentRestart())
 
+    def _cmd_provider(self) -> None:
+        self._append_chat(
+            "sys",
+            f"provider={self._cfg.provider}  endpoint={self._provider_endpoint()}  "
+            f"api_key={'set' if self._provider_key_present() else 'missing'}",
+        )
+
+    def _cmd_providers(self) -> None:
+        self._append_chat("sys", "Supported providers: ollama, openai, anthropic, gemini, ollama_cloud")
+        self._append_chat("sys", "Use /set provider <name> to switch")
+
+    def _cmd_set_provider(self, name: str) -> None:
+        aliases = {
+            "google": "gemini",
+            "google-genai": "gemini",
+            "ollama-cloud": "ollama_cloud",
+        }
+        provider = aliases.get(name.lower(), name.lower())
+        supported = {"ollama", "openai", "anthropic", "gemini", "ollama_cloud"}
+        if provider not in supported:
+            self._append_chat("sys", f"Unknown provider '{name}'. Use /providers")
+            return
+        self._cfg.provider = provider
+        header = self.query_one("#app-header", AppHeader)
+        header.provider_name = provider
+        self._append_chat("sys", f"Provider -> {provider}  restarting agent…")
+        self.post_message(AgentRestart())
+
     def _open_model_picker(self) -> None:
+        if self._cfg.provider != "ollama":
+            self._append_chat("sys", "Model picker is available only for provider=ollama. Use /set model <name>.")
+            return
+
         def _on_pick(model: str | None) -> None:
             if model:
                 self._cmd_set_model(model)
@@ -932,6 +993,71 @@ class AlphaLoopApp(App[None]):
         self.query_one("#app-header", AppHeader).model_name = name
         self._append_chat("sys", f"Model → {name}  restarting agent…")
         self.post_message(AgentRestart())
+
+    def _cmd_set_endpoint(self, endpoint: str) -> None:
+        if not endpoint:
+            self._append_chat("sys", "Usage: /set endpoint <url>")
+            return
+        if not endpoint.startswith("http://") and not endpoint.startswith("https://"):
+            self._append_chat("sys", "Endpoint must start with http:// or https://")
+            return
+
+        if self._cfg.provider == "ollama":
+            self._cfg.ollama_base_url = endpoint
+        elif self._cfg.provider == "openai":
+            self._cfg.openai_base_url = endpoint
+        elif self._cfg.provider == "ollama_cloud":
+            self._cfg.ollama_cloud_base_url = endpoint
+        else:
+            self._append_chat("sys", f"Provider '{self._cfg.provider}' does not use a configurable endpoint here.")
+            return
+
+        self._append_chat("sys", f"Endpoint -> {endpoint}  restarting agent…")
+        self.post_message(AgentRestart())
+
+    def _cmd_set_key(self, token: str) -> None:
+        if not token:
+            self._append_chat("sys", "Usage: /set key <token>")
+            return
+
+        if self._cfg.provider == "openai":
+            self._cfg.openai_api_key = token
+        elif self._cfg.provider == "anthropic":
+            self._cfg.anthropic_api_key = token
+        elif self._cfg.provider == "gemini":
+            self._cfg.gemini_api_key = token
+        elif self._cfg.provider == "ollama_cloud":
+            self._cfg.ollama_api_key = token
+        else:
+            self._append_chat("sys", "Provider 'ollama' does not require an API key.")
+            return
+
+        self._append_chat("sys", f"API key updated for provider={self._cfg.provider}  restarting agent…")
+        self.post_message(AgentRestart())
+
+    def _provider_endpoint(self) -> str:
+        if self._cfg.provider == "ollama":
+            return self._cfg.ollama_base_url
+        if self._cfg.provider == "openai":
+            return self._cfg.openai_base_url or "https://api.openai.com/v1"
+        if self._cfg.provider == "anthropic":
+            return "https://api.anthropic.com"
+        if self._cfg.provider == "gemini":
+            return "https://generativelanguage.googleapis.com"
+        if self._cfg.provider == "ollama_cloud":
+            return self._cfg.ollama_cloud_base_url
+        return "n/a"
+
+    def _provider_key_present(self) -> bool:
+        if self._cfg.provider == "openai":
+            return bool(self._cfg.openai_api_key)
+        if self._cfg.provider == "anthropic":
+            return bool(self._cfg.anthropic_api_key)
+        if self._cfg.provider == "gemini":
+            return bool(self._cfg.gemini_api_key)
+        if self._cfg.provider == "ollama_cloud":
+            return bool(self._cfg.ollama_api_key)
+        return True
 
     def _cmd_mcp_list(self) -> None:
         from alphaloop.mcp import read_mcp_connections
@@ -1406,7 +1532,13 @@ class _BackgroundRunner:
         from alphaloop.mcp import read_mcp_connections
 
         self._app.post_message(StatusUpdate("Booting agent…"))
-        graph, _, stack = await create_agent(self._cfg)
+        try:
+            graph, _, stack = await create_agent(self._cfg)
+        except Exception as exc:
+            self._graph = None
+            self._agent_stack = None
+            self._app.post_message(StatusUpdate(f"Agent boot failed: {exc}", level="error"))
+            return
         self._graph       = graph
         self._agent_stack = stack
 
@@ -1414,7 +1546,7 @@ class _BackgroundRunner:
         mcp_servers = read_mcp_connections(self._cfg)
         self._app.query_one("#status-bar", StatusBar).mcp_count = len(mcp_servers)
 
-        parts = [f"Ready  model={self._cfg.model}"]
+        parts = [f"Ready  provider={self._cfg.provider}", f"model={self._cfg.model}"]
         if self._cfg.sandbox_enabled:
             mode = "docker" if self._cfg.sandbox_use_docker else "local"
             parts.append(f"sandbox={mode}")

@@ -20,18 +20,26 @@ console = Console()
 
 @click.group()
 def cli() -> None:
-    """AlphaLoop — a 24/7 deep agent with heartbeat and Ollama."""
+    """AlphaLoop — a 24/7 deep agent with heartbeat and pluggable model providers."""
 
 
 @cli.command()
-@click.option("--model", default=None, help="Ollama model override (e.g. llama3.2:1b)")
+@click.option(
+    "--provider",
+    default=None,
+    type=click.Choice(["ollama", "openai", "anthropic", "gemini", "ollama_cloud"], case_sensitive=False),
+    help="Model provider override",
+)
+@click.option("--model", default=None, help="Model override (provider-specific)")
 @click.option("--interval", default=None, type=float, help="Heartbeat interval in seconds")
 @click.option("--thread", default=None, help="Conversation thread ID")
 @click.option("--sandbox", is_flag=True, default=False, help="Enable Docker sandbox for shell execution")
-def start(model: str | None, interval: float | None, thread: str | None, sandbox: bool) -> None:  # noqa: FBT001
+def start(provider: str | None, model: str | None, interval: float | None, thread: str | None, sandbox: bool) -> None:  # noqa: FBT001
     """Start the agent and keep it running 24/7."""
     import os
 
+    if provider:
+        os.environ["ALPHALOOP_PROVIDER"] = provider.lower()
     if model:
         os.environ["ALPHALOOP_MODEL"] = model
     if interval:
@@ -51,6 +59,7 @@ def start(model: str | None, interval: float | None, thread: str | None, sandbox
     sandbox_note = " [sandbox enabled]" if sandbox else ""
     console.print(
         f"[bold green]AlphaLoop starting[/bold green]{sandbox_note} · "
+        f"provider=[cyan]{cfg.provider}[/cyan] · "
         f"model=[cyan]{cfg.model}[/cyan] · "
         f"heartbeat=[cyan]{cfg.heartbeat_interval}s[/cyan] · "
         f"thread=[cyan]{cfg.thread_id}[/cyan]"
@@ -90,15 +99,23 @@ def send(message: str, thread: str | None) -> None:
 
 
 @cli.command()
-@click.option("--model", default=None, help="Ollama model override")
+@click.option(
+    "--provider",
+    default=None,
+    type=click.Choice(["ollama", "openai", "anthropic", "gemini", "ollama_cloud"], case_sensitive=False),
+    help="Model provider override",
+)
+@click.option("--model", default=None, help="Model override (provider-specific)")
 @click.option("--interval", default=None, type=float, help="Heartbeat interval in seconds")
 @click.option("--thread", default=None, help="Conversation thread ID")
 @click.option("--sandbox", is_flag=True, default=False, help="Enable sandbox for shell execution")
 @click.option("--docker", is_flag=True, default=False, help="Use Docker sandbox (requires Docker)")
-def tui(model: str | None, interval: float | None, thread: str | None, sandbox: bool, docker: bool) -> None:  # noqa: FBT001
+def tui(provider: str | None, model: str | None, interval: float | None, thread: str | None, sandbox: bool, docker: bool) -> None:  # noqa: FBT001
     """Launch the interactive TUI."""
     import os
 
+    if provider:
+        os.environ["ALPHALOOP_PROVIDER"] = provider.lower()
     if model:
         os.environ["ALPHALOOP_MODEL"] = model
     if interval:
@@ -129,8 +146,22 @@ def status() -> None:
     table = Table(title="AlphaLoop Config", show_header=False)
     table.add_column("Key", style="bold cyan")
     table.add_column("Value")
+    table.add_row("Provider", cfg.provider)
     table.add_row("Model", cfg.model)
-    table.add_row("Ollama URL", cfg.ollama_base_url)
+
+    endpoint = "n/a"
+    if cfg.provider == "ollama":
+        endpoint = cfg.ollama_base_url
+    elif cfg.provider == "openai":
+        endpoint = cfg.openai_base_url or "https://api.openai.com/v1"
+    elif cfg.provider == "anthropic":
+        endpoint = "https://api.anthropic.com"
+    elif cfg.provider == "gemini":
+        endpoint = "https://generativelanguage.googleapis.com"
+    elif cfg.provider == "ollama_cloud":
+        endpoint = cfg.ollama_cloud_base_url
+    table.add_row("Provider endpoint", endpoint)
+
     table.add_row("Heartbeat interval", f"{cfg.heartbeat_interval}s")
     table.add_row("Heartbeat timeout", f"{cfg.heartbeat_timeout}s")
     table.add_row("Max failures", str(cfg.max_heartbeat_failures))

@@ -30,7 +30,7 @@ async def test_create_agent_uses_live_sqlite_saver(
 
     fake_deepagents.create_deep_agent = fake_create_deep_agent
     monkeypatch.setitem(sys.modules, "deepagents", fake_deepagents)
-    monkeypatch.setattr("alphaloop.agent._build_ollama_model", lambda config: object())
+    monkeypatch.setattr("alphaloop.agent._build_model", lambda config: object())
 
     async def fake_load_mcp_tools(cfg, stack):
         return []

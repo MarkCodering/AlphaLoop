@@ -1,4 +1,4 @@
-"""AlphaLoop agent factory — wraps deepagents with an Ollama model."""
+"""AlphaLoop agent factory — builds deepagents with pluggable model providers."""
 
 from __future__ import annotations
 
@@ -7,6 +7,9 @@ from contextlib import AsyncExitStack
 from typing import Any
 
 from langchain_core.messages import HumanMessage
+from langchain_anthropic import ChatAnthropic
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph.state import CompiledStateGraph
@@ -17,16 +20,71 @@ from alphaloop.logger import get_logger, log_event
 logger = get_logger(__name__)
 
 
-def _build_ollama_model(config: Config) -> ChatOllama:
-    """Instantiate the ChatOllama model from config."""
-    return ChatOllama(
-        model=config.model,
-        base_url=config.ollama_base_url,
-        # Keep temperature low for consistent, goal-driven behaviour
-        temperature=0.1,
-        # Thinking models may need more time to respond
-        timeout=120,
-    )
+def _with_v1_path(base_url: str) -> str:
+    """Return an OpenAI-compatible base URL that ends with /v1."""
+    trimmed = base_url.rstrip("/")
+    return trimmed if trimmed.endswith("/v1") else f"{trimmed}/v1"
+
+
+def _build_model(config: Config) -> Any:
+    """Instantiate the configured chat model provider from config."""
+    provider = config.provider
+
+    if provider == "ollama":
+        return ChatOllama(
+            model=config.model,
+            base_url=config.ollama_base_url,
+            # Keep temperature low for consistent, goal-driven behaviour
+            temperature=0.1,
+            # Thinking models may need more time to respond
+            timeout=120,
+        )
+
+    if provider == "openai":
+        if not config.openai_api_key:
+            raise ValueError("OPENAI_API_KEY is required when ALPHALOOP_PROVIDER=openai")
+        kwargs: dict[str, Any] = {
+            "model": config.model,
+            "api_key": config.openai_api_key,
+            "temperature": 0.1,
+            "timeout": 120,
+        }
+        if config.openai_base_url:
+            kwargs["base_url"] = config.openai_base_url
+        return ChatOpenAI(**kwargs)
+
+    if provider == "anthropic":
+        if not config.anthropic_api_key:
+            raise ValueError("ANTHROPIC_API_KEY is required when ALPHALOOP_PROVIDER=anthropic")
+        return ChatAnthropic(
+            model=config.model,
+            api_key=config.anthropic_api_key,
+            temperature=0.1,
+            timeout=120,
+        )
+
+    if provider == "gemini":
+        if not config.gemini_api_key:
+            raise ValueError("GOOGLE_API_KEY (or GEMINI_API_KEY) is required when ALPHALOOP_PROVIDER=gemini")
+        return ChatGoogleGenerativeAI(
+            model=config.model,
+            google_api_key=config.gemini_api_key,
+            temperature=0.1,
+            timeout=120,
+        )
+
+    if provider == "ollama_cloud":
+        if not config.ollama_api_key:
+            raise ValueError("OLLAMA_API_KEY is required when ALPHALOOP_PROVIDER=ollama_cloud")
+        return ChatOpenAI(
+            model=config.model,
+            api_key=config.ollama_api_key,
+            base_url=_with_v1_path(config.ollama_cloud_base_url),
+            temperature=0.1,
+            timeout=120,
+        )
+
+    raise ValueError(f"Unsupported provider: {provider}")
 
 
 async def create_agent(
@@ -47,7 +105,7 @@ async def create_agent(
     from deepagents import create_deep_agent  # deferred — heavy import
 
     cfg = config or get_config()
-    model = _build_ollama_model(cfg)
+    model = _build_model(cfg)
     stack = AsyncExitStack()
     try:
         checkpointer = await stack.enter_async_context(
