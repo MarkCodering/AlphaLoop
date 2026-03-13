@@ -90,7 +90,8 @@ class AgentRestart(Message):
 _COMMANDS: list[tuple[str, str]] = [
     ("/palette",         "Open command palette"),
     ("/help",             "Show available commands"),
-    ("/clear",            "Clear chat history"),
+    ("/new",              "Start a new session (generates new thread)"),
+    ("/clear",            "Clear chat history (keeps current thread)"),
     ("/status",           "Show config & heartbeat state"),
     ("/restart",          "Restart the agent"),
     ("/provider",         "Show current provider"),
@@ -908,6 +909,7 @@ class AlphaLoopApp(App[None]):
 
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("ctrl+c", "quit",            "Quit"),
+        Binding("ctrl+n", "new_session",     "New"),
         Binding("ctrl+l", "clear_chat",      "Clear"),
         Binding("ctrl+k", "open_palette",    "Palette"),
         Binding("f1",     "show_help",       "Help"),
@@ -1072,6 +1074,8 @@ class AlphaLoopApp(App[None]):
             self._cmd_help()
         elif cmd == "/palette":
             self.action_open_palette()
+        elif cmd == "/new":
+            self.action_new_session()
         elif cmd == "/clear":
             self.action_clear_chat()
         elif cmd == "/status":
@@ -1585,6 +1589,15 @@ class AlphaLoopApp(App[None]):
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
+
+    def action_new_session(self) -> None:
+        import uuid
+        self._cfg.thread_id = str(uuid.uuid4())
+        self.query_one("#app-header", AppHeader).refresh()
+        self._recent_messages.clear()
+        self.query_one("#chat-log", ChatLog).clear()
+        self._append_chat("sys", f"Started new session (thread={self._cfg.thread_id}). MCP servers remain attached. Restarting agent…")
+        self.post_message(AgentRestart())
 
     def action_clear_chat(self) -> None:
         self._recent_messages.clear()
