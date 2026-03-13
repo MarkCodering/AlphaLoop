@@ -182,3 +182,26 @@ def test_paste_command_calls_paste_to_input(stub_runner: None, monkeypatch: pyte
     app._handle_slash_command("/paste")
 
     assert called["value"] is True
+
+
+def test_command_preview_page_down_moves_selection_into_hidden_window() -> None:
+    preview = CommandPreview()
+    preview.filter("/")
+
+    preview.page_down()
+
+    assert preview.selected_command() != "/palette"
+
+
+def test_set_key_without_token_opens_prompt_for_non_ollama(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = AlphaLoopApp(config=Config(provider="openai"))
+    called = {"value": False}
+
+    def _open_prompt() -> None:
+        called["value"] = True
+
+    monkeypatch.setattr(app, "_open_api_key_prompt", _open_prompt)
+
+    app._cmd_set_key("")
+
+    assert called["value"] is True

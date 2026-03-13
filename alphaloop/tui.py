@@ -284,11 +284,15 @@ class CommandPreview(Static):
 
     _matches: list[tuple[str, str]]
     _selected: int
+    _offset: int
+    _max_visible: int
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._matches = []
         self._selected = 0
+        self._offset = 0
+        self._max_visible = 10
 
     # -- public API ----------------------------------------------------------
 
@@ -297,17 +301,32 @@ class CommandPreview(Static):
         p = prefix.lower()
         self._matches = [(cmd, desc) for cmd, desc in _COMMANDS if cmd.startswith(p)]
         self._selected = 0
+        self._offset = 0
         self._sync_height()
         self.refresh()
 
     def move_up(self) -> None:
         if self._matches:
             self._selected = (self._selected - 1) % len(self._matches)
+            self._ensure_visible()
             self.refresh()
 
     def move_down(self) -> None:
         if self._matches:
             self._selected = (self._selected + 1) % len(self._matches)
+            self._ensure_visible()
+            self.refresh()
+
+    def page_up(self) -> None:
+        if self._matches:
+            self._selected = max(0, self._selected - self._max_visible)
+            self._ensure_visible()
+            self.refresh()
+
+    def page_down(self) -> None:
+        if self._matches:
+            self._selected = min(len(self._matches) - 1, self._selected + self._max_visible)
+            self._ensure_visible()
             self.refresh()
 
     def selected_command(self) -> str:
@@ -319,20 +338,34 @@ class CommandPreview(Static):
 
     def render(self) -> Text:
         t = Text()
-        for i, (cmd, desc) in enumerate(self._matches):
+        window = self._matches[self._offset:self._offset + self._max_visible]
+        for rel_i, (cmd, desc) in enumerate(window):
+            i = self._offset + rel_i
             if i == self._selected:
                 t.append(f" {cmd:<20}", style="bold bright_yellow on #1a1a0a")
                 t.append(f" {desc}\n",  style="white on #1a1a0a")
             else:
                 t.append(f" {cmd:<20}", style="bright_black")
                 t.append(f" {desc}\n",  style="bright_black")
+
+        if len(self._matches) > self._max_visible:
+            t.append(
+                f" [{self._selected + 1}/{len(self._matches)}] scroll: Up/Down/PgUp/PgDn\n",
+                style="bright_black",
+            )
         return t
 
     def _sync_height(self) -> None:
         """Resize widget to fit the number of matches (max 10)."""
-        n = min(len(self._matches), 10)
+        n = min(len(self._matches), self._max_visible)
         self.styles.height = max(n, 0)
         self.display = n > 0
+
+    def _ensure_visible(self) -> None:
+        if self._selected < self._offset:
+            self._offset = self._selected
+        elif self._selected >= self._offset + self._max_visible:
+            self._offset = self._selected - self._max_visible + 1
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +433,69 @@ class ExportScreen(ModalScreen[None]):
     def action_select_all(self) -> None:
         area = self.query_one("#export-area", TextArea)
         area.select_all()
+
+
+class ApiKeyScreen(ModalScreen[str | None]):
+    """Prompt for API key with masked input."""
+
+    BINDINGS = [Binding("escape", "dismiss_none", "Cancel", show=True)]
+
+    CSS = """
+    ApiKeyScreen {
+        align: center middle;
+    }
+    #apikey-dialog {
+        width: 70;
+        height: auto;
+        background: #0f0f12;
+        border: solid #f59e0b;
+        padding: 1 2;
+    }
+    #apikey-title {
+        height: 2;
+        color: #f59e0b;
+        text-style: bold;
+        content-align: center middle;
+        border-bottom: solid #27272a;
+        margin-bottom: 1;
+    }
+    #apikey-input {
+        height: 3;
+        border: round #27272a;
+        background: #08080a;
+        color: #e4e4e7;
+    }
+    #apikey-hint {
+        height: auto;
+        color: #3f3f46;
+        margin-top: 1;
+    }
+    """
+
+    def __init__(self, provider: str) -> None:
+        super().__init__()
+        self._provider = provider
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="apikey-dialog"):
+            yield Label("  SET API KEY", id="apikey-title")
+            yield Input(
+                placeholder=f"Enter API key for provider={self._provider}",
+                id="apikey-input",
+                password=True,
+            )
+            yield Label("Press Enter to save  ·  Esc to cancel", id="apikey-hint")
+
+    def on_mount(self) -> None:
+        self.query_one("#apikey-input", Input).focus()
+
+    @on(Input.Submitted, "#apikey-input")
+    def on_submit(self, event: Input.Submitted) -> None:
+        token = event.value.strip()
+        self.dismiss(token or None)
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
 
 
 # ---------------------------------------------------------------------------
@@ -900,6 +996,12 @@ class AlphaLoopApp(App[None]):
             elif event.key == "down":
                 preview.move_down()
                 event.prevent_default()
+            elif event.key == "pageup":
+                preview.page_up()
+                event.prevent_default()
+            elif event.key == "pagedown":
+                preview.page_down()
+                event.prevent_default()
             elif event.key == "enter":
                 cmd = preview.selected_command()
                 if cmd:
@@ -1044,6 +1146,7 @@ class AlphaLoopApp(App[None]):
             row.append(desc + "\n",   style="bright_black")
             log.write(row)
         log.write(Text("  Tip: press Ctrl+K for searchable command palette.\n", style="bright_black"))
+        log.write(Text("  Slash menu supports Up/Down/PgUp/PgDn scrolling.\n", style="bright_black"))
 
     def _cmd_tips(self) -> None:
         tips = [
@@ -1054,6 +1157,8 @@ class AlphaLoopApp(App[None]):
             "Ctrl+Y: copy last AI response",
             "Ctrl+E: export conversation",
             "Type '/': open inline command suggestions",
+            "Use PgUp/PgDn to scroll long slash-command lists",
+            "Use '/set key' (without token) for secure API key prompt",
             "Use '/provider' and '/set provider <name>' for runtime model routing",
         ]
         self._append_chat("sys", "Shortcuts:\n- " + "\n- ".join(tips))
@@ -1190,7 +1295,7 @@ class AlphaLoopApp(App[None]):
 
     def _cmd_set_key(self, token: str) -> None:
         if not token:
-            self._append_chat("sys", "Usage: /set key <token>")
+            self._open_api_key_prompt()
             return
 
         if self._cfg.provider == "openai":
@@ -1207,6 +1312,19 @@ class AlphaLoopApp(App[None]):
 
         self._append_chat("sys", f"API key updated for provider={self._cfg.provider}  restarting agent…")
         self.post_message(AgentRestart())
+
+    def _open_api_key_prompt(self) -> None:
+        if self._cfg.provider == "ollama":
+            self._append_chat("sys", "Provider 'ollama' does not require an API key.")
+            return
+
+        def _on_submit(token: str | None) -> None:
+            if token:
+                self._cmd_set_key(token)
+            else:
+                self._append_chat("sys", "API key update cancelled.")
+
+        self.push_screen(ApiKeyScreen(self._cfg.provider), _on_submit)
 
     def _provider_endpoint(self) -> str:
         if self._cfg.provider == "ollama":
