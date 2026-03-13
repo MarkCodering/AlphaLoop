@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shlex
 import time
 from collections import deque
 from pathlib import Path
@@ -49,6 +50,7 @@ from textual.widgets.option_list import Option
 from alphaloop.config import Config, get_config
 from alphaloop.heartbeat import HeartbeatMonitor, HeartbeatStats
 from alphaloop.logger import setup_logging
+from alphaloop.mcp import build_mcp_document, normalize_mcp_connection, read_mcp_document
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +94,7 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/models",           "Open interactive model picker (Ollama)"),
     ("/set model",        "Switch Ollama model  · /set model <name>"),
     ("/mcp list",         "List connected MCP servers"),
-    ("/mcp add",          "Add MCP server  · /mcp add <name> <url>  [transport=http]"),
+    ("/mcp add",          "Add MCP server  · /mcp add <name> <url|json-spec>  [transport=http]"),
     ("/mcp remove",       "Remove MCP server  · /mcp remove <name>"),
     ("/sandbox",          "Show sandbox status"),
     ("/sandbox on",       "Enable restricted-local sandbox"),
@@ -790,7 +792,11 @@ class AlphaLoopApp(App[None]):
     # ------------------------------------------------------------------
 
     def _handle_slash_command(self, text: str) -> None:
-        parts = text.split()
+        try:
+            parts = shlex.split(text)
+        except ValueError as exc:
+            self._append_chat("sys", f"Command parse error: {exc}")
+            return
         cmd   = parts[0].lower()
 
         # Two-word commands: /set model, /mcp add|remove|list
@@ -934,7 +940,7 @@ class AlphaLoopApp(App[None]):
         if not servers:
             row = Text()
             row.append("  No MCP servers configured.  Use ", style="bright_black")
-            row.append("/mcp add <name> <url>",              style="cyan")
+            row.append("/mcp add <name> <url|json-spec>",    style="cyan")
             row.append("\n")
             log.write(row)
             return
@@ -949,35 +955,45 @@ class AlphaLoopApp(App[None]):
             log.write(row)
 
     def _cmd_mcp_add(self, args: list[str]) -> None:
-        """Usage: /mcp add <name> <url> [transport=http|sse|stdio]"""
+        """Usage: /mcp add <name> <url|json-spec> [transport=http|sse|stdio]"""
         if len(args) < 2:  # noqa: PLR2004
-            self._append_chat("sys", "Usage: /mcp add <name> <url>  [transport=http]")
+            self._append_chat(
+                "sys",
+                "Usage: /mcp add <name> <url|json-spec>  [transport=http]",
+            )
             return
-        name, url = args[0], args[1]
+        name, payload = args[0], args[1]
         transport = "http"
         for a in args[2:]:
             if a.startswith("transport="):
                 transport = a.split("=", 1)[1]
 
-        connections = _read_mcp_file(self._cfg)
-        connections[name] = {"transport": transport, "url": url}
-        _write_mcp_file(self._cfg, connections)
+        try:
+            spec = _coerce_mcp_spec(payload, transport)
+        except ValueError as exc:
+            self._append_chat("sys", str(exc))
+            return
+
+        connections, wrapper_key, extras = read_mcp_document(self._cfg)
+        connections[name] = spec
+        _write_mcp_file(self._cfg, connections, wrapper_key=wrapper_key, extras=extras)
 
         # Refresh status bar count
         self.query_one("#status-bar", StatusBar).mcp_count = len(connections)
-        self._append_chat("sys", f"Added MCP server '{name}' ({transport} {url}) — restarting…")
+        descriptor = spec.get("url") or spec.get("command") or "custom spec"
+        self._append_chat("sys", f"Added MCP server '{name}' ({descriptor}) — restarting…")
         self.post_message(AgentRestart())
 
     def _cmd_mcp_remove(self, name: str) -> None:
         if not name:
             self._append_chat("sys", "Usage: /mcp remove <name>")
             return
-        connections = _read_mcp_file(self._cfg)
+        connections, wrapper_key, extras = read_mcp_document(self._cfg)
         if name not in connections:
             self._append_chat("sys", f"Server '{name}' not found")
             return
         del connections[name]
-        _write_mcp_file(self._cfg, connections)
+        _write_mcp_file(self._cfg, connections, wrapper_key=wrapper_key, extras=extras)
 
         self.query_one("#status-bar", StatusBar).mcp_count = len(connections)
         self._append_chat("sys", f"Removed MCP server '{name}' — restarting…")
@@ -1304,20 +1320,58 @@ class AlphaLoopApp(App[None]):
 
 
 def _read_mcp_file(cfg: Config) -> dict:
-    if cfg.mcp_config and cfg.mcp_config.exists():
-        try:
-            return json.loads(cfg.mcp_config.read_text())
-        except Exception:
-            pass
-    return {}
+    connections, _, _ = read_mcp_document(cfg)
+    return connections
 
 
-def _write_mcp_file(cfg: Config, connections: dict) -> None:
+def _write_mcp_file(
+    cfg: Config,
+    connections: dict,
+    *,
+    wrapper_key: str | None = None,
+    extras: dict | None = None,
+) -> None:
     path = cfg.mcp_config or Path("~/.alphaloop/mcp.json").expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(connections, indent=2))
+    existing_connections, existing_wrapper, existing_extras = read_mcp_document(cfg)
+    del existing_connections  # not needed; only here to preserve wrapper metadata
+    wrapper = wrapper_key if wrapper_key is not None else existing_wrapper
+    metadata = extras if extras is not None else existing_extras
+    if wrapper is None and metadata:
+        wrapper = "mcpServers"
+    document = build_mcp_document(connections, wrapper_key=wrapper, extras=metadata)
+    path.write_text(json.dumps(document, indent=2))
     # Ensure config points to the file
     cfg.mcp_config = path  # type: ignore[assignment]
+
+
+def _coerce_mcp_spec(payload: str, default_transport: str) -> dict[str, object]:
+    """Parse a server payload from a URL or a JSON object."""
+    payload = payload.strip()
+    if not payload:
+        raise ValueError("MCP server URL/spec cannot be empty.")
+
+    if payload.startswith("{"):
+        try:
+            spec = json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid MCP JSON spec: {exc.msg}") from exc
+        if not isinstance(spec, dict):
+            raise ValueError("MCP JSON spec must be an object.")
+        if "servers" in spec or "mcpServers" in spec:
+            raise ValueError("Pass a single server spec, not a whole MCP document.")
+        spec = normalize_mcp_connection(spec)
+        if "transport" not in spec:
+            if "command" in spec:
+                spec["transport"] = "stdio"
+            elif "url" in spec:
+                spec["transport"] = default_transport
+        return spec
+
+    if payload.startswith("http://") or payload.startswith("https://"):
+        return {"transport": default_transport, "url": payload}
+
+    raise ValueError("Use an http(s) URL or quote a JSON server spec.")
 
 
 # ---------------------------------------------------------------------------

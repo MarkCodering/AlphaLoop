@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from alphaloop.config import Config
+from alphaloop.mcp import read_mcp_connections, read_mcp_document
 from alphaloop.tui import AlphaLoopApp, CommandPreview, HistoryInput, _BackgroundRunner
 
 
@@ -58,3 +62,62 @@ async def test_history_input_up_down_navigates_command_preview_when_open(stub_ru
         await pilot.press("up")
         await pilot.pause()
         assert preview.selected_command() == "/models"
+
+
+def test_read_mcp_connections_supports_wrapped_documents(tmp_path) -> None:
+    path = tmp_path / "mcp.json"
+    path.write_text(json.dumps({
+        "servers": {
+            "github": {
+                "type": "http",
+                "url": "https://api.githubcopilot.com/mcp/",
+                "headers": {
+                    "Authorization": "Bearer ${input:github_mcp_pat}",
+                },
+            },
+        },
+        "inputs": [
+            {
+                "type": "promptString",
+                "id": "github_mcp_pat",
+                "description": "GitHub Personal Access Token",
+                "password": True,
+            },
+        ],
+    }))
+    cfg = Config(mcp_config=path)
+
+    connections, wrapper_key, extras = read_mcp_document(cfg)
+
+    assert wrapper_key == "servers"
+    assert list(connections) == ["github"]
+    assert extras["inputs"][0]["id"] == "github_mcp_pat"
+    assert read_mcp_connections(cfg)["github"]["url"] == "https://api.githubcopilot.com/mcp/"
+
+
+@pytest.mark.asyncio
+async def test_mcp_add_accepts_quoted_json_spec_and_preserves_wrapper(
+    stub_runner: None,
+    tmp_path,
+) -> None:
+    path = tmp_path / "mcp.json"
+    path.write_text(json.dumps({
+        "mcpServers": {
+            "existing": {
+                "url": "https://mcp.notion.com/mcp",
+            },
+        },
+    }))
+    app = AlphaLoopApp(config=Config(mcp_config=path))
+
+    async with app.run_test():
+        app._handle_slash_command(
+            '/mcp add github \'{"url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer ${input:github_mcp_pat}"}}\''
+        )
+
+    saved = json.loads(path.read_text())
+
+    assert "mcpServers" in saved
+    assert saved["mcpServers"]["existing"]["url"] == "https://mcp.notion.com/mcp"
+    assert saved["mcpServers"]["github"]["transport"] == "http"
+    assert saved["mcpServers"]["github"]["headers"]["Authorization"] == "Bearer ${input:github_mcp_pat}"

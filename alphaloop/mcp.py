@@ -14,17 +14,69 @@ from alphaloop.logger import get_logger, log_event
 logger = get_logger(__name__)
 
 
-def read_mcp_connections(config: Config) -> dict[str, Any]:
-    """Parse the MCP config file and return the connections dict (or empty dict)."""
-    if config.mcp_config is None:
+def normalize_mcp_connection(spec: Any) -> dict[str, Any]:
+    """Normalize one MCP connection spec to the shape expected by the adapter."""
+    if not isinstance(spec, dict):
         return {}
-    if not config.mcp_config.exists():
+
+    normalized = dict(spec)
+    if "transport" not in normalized and isinstance(normalized.get("type"), str):
+        normalized["transport"] = normalized["type"]
+    return normalized
+
+
+def _read_mcp_raw(config: Config) -> dict[str, Any]:
+    """Read the raw MCP config document from disk."""
+    if config.mcp_config is None or not config.mcp_config.exists():
         return {}
     try:
-        return json.loads(config.mcp_config.read_text())
+        data = json.loads(config.mcp_config.read_text())
+        return data if isinstance(data, dict) else {}
     except Exception as exc:
         logger.error("mcp.load: failed to parse %s: %s", config.mcp_config, exc)
         return {}
+
+
+def split_mcp_document(data: dict[str, Any]) -> tuple[dict[str, Any], str | None, dict[str, Any]]:
+    """Return ``(connections, wrapper_key, extras)`` for a parsed MCP document."""
+    if not isinstance(data, dict):
+        return {}, None, {}
+
+    for wrapper_key in ("servers", "mcpServers"):
+        wrapped = data.get(wrapper_key)
+        if isinstance(wrapped, dict):
+            extras = {k: v for k, v in data.items() if k != wrapper_key}
+            return wrapped, wrapper_key, extras
+
+    return data, None, {}
+
+
+def build_mcp_document(
+    connections: dict[str, Any],
+    *,
+    wrapper_key: str | None = None,
+    extras: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a serializable MCP document from connections plus optional metadata."""
+    extras = extras or {}
+    if wrapper_key:
+        return {wrapper_key: connections, **extras}
+    return connections
+
+
+def read_mcp_document(config: Config) -> tuple[dict[str, Any], str | None, dict[str, Any]]:
+    """Read and normalize the MCP document from disk."""
+    return split_mcp_document(_read_mcp_raw(config))
+
+
+def read_mcp_connections(config: Config) -> dict[str, Any]:
+    """Parse the MCP config file and return the server connections dict (or empty dict)."""
+    connections, _, _ = read_mcp_document(config)
+    return {
+        name: normalize_mcp_connection(spec)
+        for name, spec in connections.items()
+        if isinstance(spec, dict)
+    }
 
 
 async def load_mcp_tools(config: Config, stack: AsyncExitStack) -> list[BaseTool]:

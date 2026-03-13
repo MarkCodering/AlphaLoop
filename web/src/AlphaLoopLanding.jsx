@@ -25,6 +25,8 @@ const TERMINAL_LINES = [
   "[Loop] Deep work sequence initiated. Running in background 24/7.",
 ];
 
+const REPO_URL = 'https://github.com/MarkCodering/AlphaLoop';
+
 const TerminalSimulation = () => {
   const [visibleCount, setVisibleCount] = useState(0);
 
@@ -116,10 +118,10 @@ export default function AlphaLoopLanding() {
           <div className="hidden md:flex items-center space-x-10 text-xs font-mono font-medium tracking-widest uppercase text-zinc-500">
             <a href="#features" className="hover:text-zinc-100 transition-colors">Features</a>
             <a href="#security" className="hover:text-amber-500 transition-colors">Security</a>
-            <a href="https://github.com/langchain-ai/deepagents" className="hover:text-zinc-100 transition-colors">Docs</a>
+            <a href="/docs/" className="hover:text-zinc-100 transition-colors">Docs</a>
           </div>
           <div className="flex items-center space-x-6">
-            <a href="https://github.com/MarkCodering/AlphaLoop" className="text-zinc-500 hover:text-white transition-colors">
+            <a href={REPO_URL} className="text-zinc-500 hover:text-white transition-colors">
               <Github className="w-5 h-5" />
             </a>
             <button className="hidden md:inline-flex items-center justify-center px-6 py-2.5 text-xs font-mono font-bold tracking-widest uppercase text-black bg-zinc-100 hover:bg-white transition-colors">
@@ -156,10 +158,10 @@ export default function AlphaLoopLanding() {
                 <Command className="w-5 h-5 mr-3" />
                 ./run.sh tui
               </button>
-              <button className="inline-flex items-center justify-center px-8 py-4 text-sm font-mono font-bold tracking-widest uppercase text-zinc-300 bg-transparent border border-zinc-700 hover:border-zinc-300 transition-all group">
+              <a href="/docs/" className="inline-flex items-center justify-center px-8 py-4 text-sm font-mono font-bold tracking-widest uppercase text-zinc-300 bg-transparent border border-zinc-700 hover:border-zinc-300 transition-all group">
                 Documentation
                 <ChevronRight className="w-4 h-4 ml-3 group-hover:translate-x-1 transition-transform" />
-              </button>
+              </a>
             </div>
           </div>
 
@@ -331,7 +333,7 @@ export default function AlphaLoopLanding() {
           <div className="bg-[#050505] border border-zinc-800 p-8 font-mono text-sm space-y-3">
             {[
               ['#', 'Clone and enter the project', 'text-zinc-600'],
-              ['git clone', 'https://github.com/your-org/alphaloop && cd alphaloop', 'text-zinc-300'],
+              ['git clone', 'https://github.com/MarkCodering/AlphaLoop && cd AlphaLoop', 'text-zinc-300'],
               ['#', 'Install Python dependencies', 'text-zinc-600'],
               ['uv sync', '', 'text-zinc-300'],
               ['#', 'Pull the model', 'text-zinc-600'],
@@ -359,7 +361,7 @@ export default function AlphaLoopLanding() {
           <h2 className="text-4xl md:text-6xl font-black uppercase tracking-tighter text-white mb-6">Initialize Run</h2>
           <p className="text-sm font-mono text-zinc-500 mb-12">Open source. MIT licensed. Runs entirely on your hardware.</p>
           <div className="flex flex-col sm:flex-row justify-center gap-6">
-            <a href="https://github.com/MarkCodering/AlphaLoop" className="inline-flex items-center justify-center px-8 py-4 text-sm font-mono font-bold tracking-widest uppercase text-black bg-white hover:bg-zinc-200 transition-all">
+            <a href={REPO_URL} className="inline-flex items-center justify-center px-8 py-4 text-sm font-mono font-bold tracking-widest uppercase text-black bg-white hover:bg-zinc-200 transition-all">
               <Github className="w-5 h-5 mr-3" />
               Source Code
             </a>
@@ -379,9 +381,9 @@ export default function AlphaLoopLanding() {
             <span className="text-sm font-mono font-bold tracking-widest uppercase text-zinc-400">AlphaLoop</span>
           </div>
           <div className="flex flex-wrap justify-center gap-8 text-xs font-mono font-bold tracking-widest uppercase text-zinc-600">
-            {['Docs', 'GitHub', 'X', 'Discord'].map(l => (
-              <a key={l} href="#" className="hover:text-zinc-300 transition-colors">{l}</a>
-            ))}
+            <a href="/docs/" className="hover:text-zinc-300 transition-colors">Docs</a>
+            <a href={REPO_URL} className="hover:text-zinc-300 transition-colors">GitHub</a>
+            <a href={REPO_URL} className="hover:text-zinc-300 transition-colors">Repository</a>
           </div>
           <p className="text-zinc-700 text-xs font-mono uppercase tracking-widest">© 2026 // MIT License</p>
         </div>

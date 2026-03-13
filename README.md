@@ -31,7 +31,7 @@ Built on [deepagents](https://github.com/langchain-ai/deepagents) + [LangGraph](
 
 ```bash
 # 1. Clone
-git clone https://github.com/your-org/alphaloop && cd alphaloop
+git clone https://github.com/MarkCodering/AlphaLoop && cd AlphaLoop
 
 # 2. Install Python dependencies
 uv sync
