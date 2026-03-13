@@ -31,13 +31,17 @@ from textual.containers import Horizontal, Vertical
 from textual.events import Key
 from textual.message import Message
 from textual.reactive import reactive
+from textual.screen import ModalScreen
 from textual.widgets import (
     Footer,
     Input,
+    Label,
     Log,
+    OptionList,
     RichLog,
     Static,
 )
+from textual.widgets.option_list import Option
 
 from alphaloop.config import Config, get_config
 from alphaloop.heartbeat import HeartbeatMonitor, HeartbeatStats
@@ -82,6 +86,7 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/clear",            "Clear chat history"),
     ("/status",           "Show config & heartbeat state"),
     ("/restart",          "Restart the agent"),
+    ("/models",           "Open interactive model picker (Ollama)"),
     ("/set model",        "Switch Ollama model  · /set model <name>"),
     ("/mcp list",         "List connected MCP servers"),
     ("/mcp add",          "Add MCP server  · /mcp add <name> <url>  [transport=http]"),
@@ -237,6 +242,142 @@ class CommandPreview(Static):
 
 
 # ---------------------------------------------------------------------------
+# Ollama model helpers
+# ---------------------------------------------------------------------------
+
+
+async def _fetch_ollama_models(base_url: str) -> list[tuple[str, str]]:
+    """Return [(name, size_label), …] from Ollama /api/tags, or [] on error."""
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{base_url}/api/tags")
+            resp.raise_for_status()
+            models = resp.json().get("models", [])
+            result = []
+            for m in models:
+                name = m.get("name", "")
+                size = m.get("size", 0)
+                gb   = size / 1_073_741_824
+                label = f"{gb:.1f} GB" if gb >= 0.1 else f"{size // 1_048_576} MB"  # noqa: PLR2004
+                result.append((name, label))
+            return sorted(result, key=lambda x: x[0])
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Model picker modal
+# ---------------------------------------------------------------------------
+
+
+class ModelPickerScreen(ModalScreen[str | None]):
+    """Full-screen modal for selecting an Ollama model."""
+
+    BINDINGS = [Binding("escape", "dismiss_none", "Cancel", show=True)]
+
+    CSS = """
+    ModelPickerScreen {
+        align: center middle;
+    }
+    #picker-dialog {
+        width: 70;
+        height: auto;
+        max-height: 30;
+        background: #0f0f12;
+        border: solid #f59e0b;
+        padding: 1 2;
+    }
+    #picker-title {
+        height: 2;
+        color: #f59e0b;
+        text-style: bold;
+        content-align: center middle;
+        border-bottom: solid #27272a;
+        margin-bottom: 1;
+    }
+    #picker-hint {
+        height: 1;
+        color: #3f3f46;
+        content-align: center middle;
+        margin-top: 1;
+    }
+    #picker-loading {
+        height: 3;
+        color: #52525b;
+        content-align: center middle;
+    }
+    OptionList {
+        background: #0f0f12;
+        border: none;
+        height: auto;
+        max-height: 20;
+        scrollbar-color: #27272a #0f0f12;
+        scrollbar-size: 1 1;
+    }
+    OptionList > .option-list--option {
+        color: #a1a1aa;
+        padding: 0 1;
+    }
+    OptionList > .option-list--option-highlighted {
+        background: #1a1a0a;
+        color: #f59e0b;
+        text-style: bold;
+    }
+    """
+
+    def __init__(self, base_url: str, current_model: str) -> None:
+        super().__init__()
+        self._base_url      = base_url
+        self._current_model = current_model
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="picker-dialog"):
+            yield Label("  SELECT MODEL", id="picker-title")
+            yield Label("Fetching models from Ollama…", id="picker-loading")
+            yield Label("↑ ↓ navigate  ·  Enter select  ·  Esc cancel", id="picker-hint")
+
+    def on_mount(self) -> None:
+        self._load_models()
+
+    @work(exclusive=True)
+    async def _load_models(self) -> None:
+        models = await _fetch_ollama_models(self._base_url)
+        loading = self.query_one("#picker-loading", Label)
+        if not models:
+            loading.update("[red]No models found — is Ollama running?[/red]")
+            return
+
+        loading.remove()
+        options = []
+        for name, size in models:
+            marker = " ●" if name == self._current_model else "  "
+            options.append(Option(
+                Text.from_markup(
+                    f"[cyan]{marker} {name}[/cyan]  [bright_black]{size}[/bright_black]"
+                ),
+                id=name,
+            ))
+
+        ol = OptionList(*options, id="picker-list")
+        await self.query_one("#picker-dialog").mount(ol, before="#picker-hint")
+        ol.focus()
+
+        # Pre-select current model if present
+        for i, (name, _) in enumerate(models):
+            if name == self._current_model:
+                ol.highlighted = i
+                break
+
+    @on(OptionList.OptionSelected, "#picker-list")
+    def on_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id)
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
+# ---------------------------------------------------------------------------
 # Theme constants
 # ---------------------------------------------------------------------------
 
@@ -380,8 +521,9 @@ class AlphaLoopApp(App[None]):
     """
 
     BINDINGS: ClassVar[list[Binding]] = [
-        Binding("ctrl+c", "quit",       "Quit"),
-        Binding("ctrl+l", "clear_chat", "Clear"),
+        Binding("ctrl+c", "quit",          "Quit"),
+        Binding("ctrl+l", "clear_chat",    "Clear"),
+        Binding("ctrl+m", "open_models",   "Models"),
         Binding("escape", "dismiss_preview", show=False),
     ]
 
@@ -496,10 +638,16 @@ class AlphaLoopApp(App[None]):
             self._cmd_status()
         elif cmd == "/restart":
             self._cmd_restart()
+        elif cmd in ("/models", "/model"):
+            self._open_model_picker()
         elif cmd == "/thread":
             self._append_chat("sys", f"thread={self._cfg.thread_id}")
         elif two == "/set model":
-            self._cmd_set_model(parts[2] if len(parts) > 2 else "")
+            name = parts[2] if len(parts) > 2 else ""
+            if name:
+                self._cmd_set_model(name)
+            else:
+                self._open_model_picker()
         elif two == "/mcp list":
             self._cmd_mcp_list()
         elif two == "/mcp add":
@@ -581,14 +729,20 @@ class AlphaLoopApp(App[None]):
         self._append_chat("sys", "Restarting agent…")
         self.post_message(AgentRestart())
 
+    def _open_model_picker(self) -> None:
+        def _on_pick(model: str | None) -> None:
+            if model:
+                self._cmd_set_model(model)
+
+        self.push_screen(
+            ModelPickerScreen(self._cfg.ollama_base_url, self._cfg.model),
+            _on_pick,
+        )
+
     def _cmd_set_model(self, name: str) -> None:
-        if not name:
-            self._append_chat("sys", "Usage: /set model <ollama-model-name>")
-            return
         self._cfg.model = name
-        header = self.query_one("#app-header", AppHeader)
-        header.model_name = name
-        self._append_chat("sys", f"Model set to [cyan]{name}[/cyan] — restarting agent…")
+        self.query_one("#app-header", AppHeader).model_name = name
+        self._append_chat("sys", f"Model → [cyan]{name}[/cyan]  restarting agent…")
         self.post_message(AgentRestart())
 
     def _cmd_mcp_list(self) -> None:
@@ -704,6 +858,9 @@ class AlphaLoopApp(App[None]):
     def action_clear_chat(self) -> None:
         self._recent_messages.clear()
         self.query_one("#chat-log", RichLog).clear()
+
+    def action_open_models(self) -> None:
+        self._open_model_picker()
 
     def action_dismiss_preview(self) -> None:
         preview = self.query_one("#cmd-preview", CommandPreview)
