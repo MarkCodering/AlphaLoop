@@ -1025,7 +1025,11 @@ class AlphaLoopApp(App[None]):
         async def _progress(msg: str) -> None:
             self._append_chat("sys", msg)
 
-        token = await run_oauth_flow(name, url, on_progress=_progress)
+        try:
+            token = await run_oauth_flow(name, url, on_progress=_progress)
+        except Exception as exc:
+            self._append_chat("sys", f"OAuth flow failed: {exc}")
+            return
         if token:
             self._append_chat("sys", f"Authenticated with '{name}'. Restarting agent…")
             self.post_message(AgentRestart())

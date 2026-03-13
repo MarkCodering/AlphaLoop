@@ -20,8 +20,9 @@ async def test_create_agent_uses_live_sqlite_saver(
 
     fake_deepagents = ModuleType("deepagents")
 
-    def fake_create_deep_agent(*, model, system_prompt, checkpointer, backend):
+    def fake_create_deep_agent(*, model, tools, system_prompt, checkpointer, backend):
         captured["model"] = model
+        captured["tools"] = tools
         captured["system_prompt"] = system_prompt
         captured["checkpointer"] = checkpointer
         captured["backend"] = backend
@@ -30,6 +31,12 @@ async def test_create_agent_uses_live_sqlite_saver(
     fake_deepagents.create_deep_agent = fake_create_deep_agent
     monkeypatch.setitem(sys.modules, "deepagents", fake_deepagents)
     monkeypatch.setattr("alphaloop.agent._build_ollama_model", lambda config: object())
+
+    async def fake_load_mcp_tools(cfg, stack):
+        return []
+
+    monkeypatch.setattr("alphaloop.mcp.load_mcp_tools", fake_load_mcp_tools)
+    monkeypatch.setattr("alphaloop.skills.get_enabled_tools", lambda: [])
 
     cfg = Config(
         checkpoint_db=tmp_path / "checkpoints.db",
@@ -43,5 +50,6 @@ async def test_create_agent_uses_live_sqlite_saver(
         assert isinstance(checkpointer, AsyncSqliteSaver)
         assert captured["checkpointer"] is checkpointer
         assert captured["backend"] is None
+        assert captured["tools"] is None
     finally:
         await stack.aclose()

@@ -54,6 +54,8 @@ class OAuthToken:
     token_type:    str   = "Bearer"
     refresh_token: str   | None = None
     expires_at:    float | None = None   # unix timestamp
+    client_id:     str   = _CLIENT_ID
+    client_secret: str   | None = None
 
     def is_expired(self, buffer: float = 60.0) -> bool:
         if self.expires_at is None:
@@ -66,6 +68,7 @@ class OAuthMetadata:
     authorization_endpoint: str
     token_endpoint:         str
     scopes_supported:       list[str]
+    registration_endpoint:  str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -119,11 +122,7 @@ def get_auth_headers(server_name: str) -> dict[str, str]:
 
 async def discover_oauth_metadata(server_url: str) -> OAuthMetadata | None:
     """Try to fetch OAuth server metadata from well-known endpoints."""
-    base = server_url.rstrip("/")
-    candidates = [
-        f"{base}/.well-known/oauth-authorization-server",
-        f"{base}/.well-known/openid-configuration",
-    ]
+    candidates = _oauth_metadata_candidates(server_url)
     async with httpx.AsyncClient(timeout=8) as client:
         for url in candidates:
             try:
@@ -134,10 +133,64 @@ async def discover_oauth_metadata(server_url: str) -> OAuthMetadata | None:
                         authorization_endpoint=data["authorization_endpoint"],
                         token_endpoint=data["token_endpoint"],
                         scopes_supported=data.get("scopes_supported", ["openid"]),
+                        registration_endpoint=data.get("registration_endpoint"),
                     )
             except Exception:
                 continue
-    return None
+    return _default_oauth_metadata(server_url)
+
+
+def _oauth_metadata_candidates(server_url: str) -> list[str]:
+    """Build likely well-known metadata URLs for an MCP endpoint URL."""
+    parsed = urllib.parse.urlparse(server_url)
+    if not parsed.scheme or not parsed.netloc:
+        return []
+
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    path = (parsed.path or "").strip("/")
+    path_parts = [part for part in path.split("/") if part]
+
+    bases = [origin]
+    if path_parts:
+        for index in range(len(path_parts), 0, -1):
+            bases.append(f"{origin}/{'/'.join(path_parts[:index])}")
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for base in bases:
+        trimmed = base.rstrip("/")
+        for suffix in (
+            "/.well-known/oauth-authorization-server",
+            "/.well-known/openid-configuration",
+        ):
+            url = f"{trimmed}{suffix}"
+            if url not in seen:
+                seen.add(url)
+                candidates.append(url)
+    return candidates
+
+
+def _default_oauth_metadata(server_url: str) -> OAuthMetadata | None:
+    """Return default OAuth endpoints derived from the MCP server origin."""
+    parsed = urllib.parse.urlparse(server_url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    return OAuthMetadata(
+        authorization_endpoint=f"{origin}/authorize",
+        token_endpoint=f"{origin}/token",
+        registration_endpoint=f"{origin}/register",
+        scopes_supported=["openid", "profile"],
+    )
+
+
+def _format_http_error(exc: Exception) -> str:
+    """Return a compact HTTP error string including the response body when available."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        body = exc.response.text.strip()
+        if body:
+            return f"{exc} :: {body}"
+    return str(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -209,14 +262,18 @@ async def _exchange_code(
     token_endpoint: str,
     code: str,
     code_verifier: str,
+    client_id: str,
+    client_secret: str | None = None,
 ) -> OAuthToken | None:
     payload = {
         "grant_type":    "authorization_code",
         "code":          code,
         "redirect_uri":  _CALLBACK_URI,
-        "client_id":     _CLIENT_ID,
+        "client_id":     client_id,
         "code_verifier": code_verifier,
     }
+    if client_secret:
+        payload["client_secret"] = client_secret
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(token_endpoint, data=payload)
         resp.raise_for_status()
@@ -227,15 +284,24 @@ async def _exchange_code(
         token_type    = data.get("token_type", "Bearer"),
         refresh_token = data.get("refresh_token"),
         expires_at    = time.time() + expires_in if expires_in else None,
+        client_id     = client_id,
+        client_secret = client_secret,
     )
 
 
-async def _refresh_token(token_endpoint: str, refresh_token: str) -> OAuthToken | None:
+async def _refresh_token(
+    token_endpoint: str,
+    refresh_token: str,
+    client_id: str,
+    client_secret: str | None = None,
+) -> OAuthToken | None:
     payload = {
         "grant_type":    "refresh_token",
         "refresh_token": refresh_token,
-        "client_id":     _CLIENT_ID,
+        "client_id":     client_id,
     }
+    if client_secret:
+        payload["client_secret"] = client_secret
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(token_endpoint, data=payload)
@@ -247,9 +313,30 @@ async def _refresh_token(token_endpoint: str, refresh_token: str) -> OAuthToken 
             token_type    = data.get("token_type", "Bearer"),
             refresh_token = data.get("refresh_token", refresh_token),
             expires_at    = time.time() + expires_in if expires_in else None,
+            client_id     = client_id,
+            client_secret = client_secret,
         )
     except Exception:
         return None
+
+
+async def _register_client(
+    registration_endpoint: str,
+    server_name: str,
+) -> tuple[str, str | None]:
+    """Register AlphaLoop as a public OAuth client if the server supports DCR."""
+    payload = {
+        "client_name": f"AlphaLoop ({server_name})",
+        "redirect_uris": [_CALLBACK_URI],
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "token_endpoint_auth_method": "none",
+    }
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(registration_endpoint, json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+    return data["client_id"], data.get("client_secret")
 
 
 # ---------------------------------------------------------------------------
@@ -278,7 +365,12 @@ async def ensure_token(
         await _info("Refreshing OAuth token…")
         meta = await discover_oauth_metadata(server_url)
         if meta:
-            refreshed = await _refresh_token(meta.token_endpoint, existing.refresh_token)
+            refreshed = await _refresh_token(
+                meta.token_endpoint,
+                existing.refresh_token,
+                existing.client_id,
+                existing.client_secret,
+            )
             if refreshed:
                 tokens = load_tokens()
                 tokens[server_name] = refreshed
@@ -323,12 +415,22 @@ async def run_oauth_flow(
 
     code_verifier, code_challenge = _pkce_pair()
     state = secrets.token_urlsafe(16)
+    client_id = _CLIENT_ID
+    client_secret = None
+
+    if meta.registration_endpoint:
+        await _info("Registering OAuth client…")
+        try:
+            client_id, client_secret = await _register_client(meta.registration_endpoint, server_name)
+        except Exception as exc:
+            await _info(f"Dynamic client registration failed: {_format_http_error(exc)}")
+            return None
 
     scope = " ".join(meta.scopes_supported[:4]) if meta.scopes_supported else _DEFAULT_SCOPE
 
     params = urllib.parse.urlencode({
         "response_type":         "code",
-        "client_id":             _CLIENT_ID,
+        "client_id":             client_id,
         "redirect_uri":          _CALLBACK_URI,
         "scope":                 scope,
         "state":                 state,
@@ -356,9 +458,15 @@ async def run_oauth_flow(
 
     await _info("Exchanging authorization code for token…")
     try:
-        token = await _exchange_code(meta.token_endpoint, code, code_verifier)
+        token = await _exchange_code(
+            meta.token_endpoint,
+            code,
+            code_verifier,
+            client_id,
+            client_secret,
+        )
     except Exception as exc:
-        await _info(f"Token exchange failed: {exc}")
+        await _info(f"Token exchange failed: {_format_http_error(exc)}")
         return None
 
     tokens = load_tokens()
