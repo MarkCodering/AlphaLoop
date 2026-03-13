@@ -17,6 +17,7 @@ Layout
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import shlex
 import time
@@ -87,6 +88,7 @@ class AgentRestart(Message):
 # ---------------------------------------------------------------------------
 
 _COMMANDS: list[tuple[str, str]] = [
+    ("/palette",         "Open command palette"),
     ("/help",             "Show available commands"),
     ("/clear",            "Clear chat history"),
     ("/status",           "Show config & heartbeat state"),
@@ -114,6 +116,7 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/copy",             "Copy last AI response to clipboard  (also Ctrl+Y)"),
     ("/export",           "Open full conversation in a selectable text view"),
     ("/thread",           "Show current thread ID"),
+    ("/tips",             "Show productivity shortcuts"),
 ]
 
 
@@ -533,6 +536,123 @@ class ModelPickerScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class CommandPaletteScreen(ModalScreen[str | None]):
+    """Searchable command palette for fast discovery and insertion."""
+
+    BINDINGS = [Binding("escape", "dismiss_none", "Cancel", show=True)]
+
+    CSS = """
+    CommandPaletteScreen {
+        align: center middle;
+    }
+    #palette-dialog {
+        width: 80;
+        height: auto;
+        max-height: 32;
+        background: #0f0f12;
+        border: solid #f59e0b;
+        padding: 1 2;
+    }
+    #palette-title {
+        height: 2;
+        color: #f59e0b;
+        text-style: bold;
+        content-align: center middle;
+        border-bottom: solid #27272a;
+        margin-bottom: 1;
+    }
+    #palette-filter {
+        height: 3;
+        border: round #27272a;
+        margin-bottom: 1;
+        background: #08080a;
+        color: #e4e4e7;
+    }
+    #palette-hint {
+        height: 1;
+        color: #3f3f46;
+        content-align: center middle;
+        margin-top: 1;
+    }
+    OptionList {
+        background: #0f0f12;
+        border: none;
+        height: auto;
+        max-height: 20;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="palette-dialog"):
+            yield Label("  COMMAND PALETTE", id="palette-title")
+            yield Input(placeholder="Type to filter commands…", id="palette-filter")
+            yield OptionList(id="palette-list")
+            yield Label("↑ ↓ navigate  ·  Enter insert  ·  Esc cancel", id="palette-hint")
+
+    def on_mount(self) -> None:
+        self._refresh_options("")
+        self.query_one("#palette-filter", Input).focus()
+
+    @on(Input.Changed, "#palette-filter")
+    def on_filter_changed(self, event: Input.Changed) -> None:
+        self._refresh_options(event.value)
+
+    @on(Input.Submitted, "#palette-filter")
+    def on_filter_submit(self, _: Input.Submitted) -> None:
+        self._dismiss_current()
+
+    @on(OptionList.OptionSelected, "#palette-list")
+    def on_option_selected(self, event: OptionList.OptionSelected) -> None:
+        self.dismiss(event.option.id)
+
+    def _refresh_options(self, query: str) -> None:
+        q = query.lower().strip()
+
+        def _score(item: tuple[str, str]) -> tuple[int, str]:
+            cmd, desc = item
+            cmd_l = cmd.lower()
+            desc_l = desc.lower()
+            if not q:
+                return (0, cmd)
+            if cmd_l.startswith(q):
+                return (0, cmd)
+            if q in cmd_l:
+                return (1, cmd)
+            if q in desc_l:
+                return (2, cmd)
+            return (3, cmd)
+
+        scored = sorted(_COMMANDS, key=_score)
+        filtered = [item for item in scored if _score(item)[0] < 3]
+        if not q:
+            filtered = scored
+
+        options = []
+        for cmd, desc in filtered[:20]:
+            label = Text()
+            label.append(f" {cmd:<22}", style="cyan")
+            label.append(desc, style="bright_black")
+            options.append(Option(label, id=cmd))
+
+        ol = self.query_one("#palette-list", OptionList)
+        ol.clear_options()
+        if options:
+            ol.add_options(options)
+            ol.highlighted = 0
+
+    def _dismiss_current(self) -> None:
+        ol = self.query_one("#palette-list", OptionList)
+        if ol.option_count <= 0:
+            self.dismiss(None)
+            return
+        idx = ol.highlighted
+        option = ol.get_option_at_index(idx if idx is not None else 0)
+        self.dismiss(option.id)
+
+    def action_dismiss_none(self) -> None:
+        self.dismiss(None)
+
+
 # ---------------------------------------------------------------------------
 # Theme constants
 # ---------------------------------------------------------------------------
@@ -682,6 +802,9 @@ class AlphaLoopApp(App[None]):
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("ctrl+c", "quit",            "Quit"),
         Binding("ctrl+l", "clear_chat",      "Clear"),
+        Binding("ctrl+k", "open_palette",    "Palette"),
+        Binding("f1",     "show_help",       "Help"),
+        Binding("ctrl+r", "restart_agent",   "Restart"),
         Binding("ctrl+m", "open_models",     "Models"),
         Binding("ctrl+y", "copy_last",       "Copy"),
         Binding("ctrl+e", "export_chat",     "Export"),
@@ -724,6 +847,10 @@ class AlphaLoopApp(App[None]):
         self._runner = _BackgroundRunner(self._cfg, self)
         self._runner.start_all()
         self.query_one("#user-input", HistoryInput).focus()
+        self._append_chat(
+            "sys",
+            "Welcome to AlphaLoop. Press Ctrl+K for command palette, F1 for help, or type /tips.",
+        )
 
     async def on_unmount(self) -> None:
         if self._runner:
@@ -768,6 +895,13 @@ class AlphaLoopApp(App[None]):
                 event.prevent_default()
             elif event.key == "down":
                 preview.move_down()
+                event.prevent_default()
+            elif event.key == "enter":
+                cmd = preview.selected_command()
+                if cmd:
+                    inp.value = cmd + " "
+                    inp.cursor_position = len(inp.value)
+                    preview.filter(cmd)
                 event.prevent_default()
             elif event.key == "tab":
                 cmd = preview.selected_command()
@@ -817,6 +951,8 @@ class AlphaLoopApp(App[None]):
 
         if cmd in ("/help", "/?"):
             self._cmd_help()
+        elif cmd == "/palette":
+            self.action_open_palette()
         elif cmd == "/clear":
             self.action_clear_chat()
         elif cmd == "/status":
@@ -835,6 +971,8 @@ class AlphaLoopApp(App[None]):
             self.action_export_chat()
         elif cmd == "/thread":
             self._append_chat("sys", f"thread={self._cfg.thread_id}")
+        elif cmd == "/tips":
+            self._cmd_tips()
         elif two == "/set model":
             name = parts[2] if len(parts) > 2 else ""
             if name:
@@ -882,7 +1020,7 @@ class AlphaLoopApp(App[None]):
         elif cmd == "/sandbox":
             self._cmd_sandbox()
         else:
-            self._append_chat("sys", f"Unknown command: {text}  · type /help")
+            self._append_chat("sys", self._suggest_unknown_command(text))
 
     def _cmd_help(self) -> None:
         log = self.query_one("#chat-log", ChatLog)
@@ -893,6 +1031,29 @@ class AlphaLoopApp(App[None]):
             row.append(f"  {cmd:<22}", style="cyan")
             row.append(desc + "\n",   style="bright_black")
             log.write(row)
+        log.write(Text("  Tip: press Ctrl+K for searchable command palette.\n", style="bright_black"))
+
+    def _cmd_tips(self) -> None:
+        tips = [
+            "Ctrl+K: open command palette",
+            "F1: show help",
+            "Ctrl+R: restart agent",
+            "Ctrl+M: open local Ollama model picker",
+            "Ctrl+Y: copy last AI response",
+            "Ctrl+E: export conversation",
+            "Type '/': open inline command suggestions",
+            "Use '/provider' and '/set provider <name>' for runtime model routing",
+        ]
+        self._append_chat("sys", "Shortcuts:\n- " + "\n- ".join(tips))
+
+    def _suggest_unknown_command(self, text: str) -> str:
+        parts = text.strip().split()
+        typed = parts[0] if parts else text.strip()
+        known = [cmd for cmd, _ in _COMMANDS]
+        matches = difflib.get_close_matches(typed.lower(), known, n=1, cutoff=0.5)
+        if matches:
+            return f"Unknown command: {text}  · maybe {matches[0]} ?"
+        return f"Unknown command: {text}  · type /help or press Ctrl+K"
 
     def _cmd_status(self) -> None:
         from alphaloop.mcp import read_mcp_connections
@@ -1280,6 +1441,23 @@ class AlphaLoopApp(App[None]):
 
     def action_open_models(self) -> None:
         self._open_model_picker()
+
+    def action_open_palette(self) -> None:
+        def _on_pick(cmd: str | None) -> None:
+            if not cmd:
+                return
+            inp = self.query_one("#user-input", HistoryInput)
+            inp.value = cmd + " "
+            inp.cursor_position = len(inp.value)
+            inp.focus()
+
+        self.push_screen(CommandPaletteScreen(), _on_pick)
+
+    def action_show_help(self) -> None:
+        self._cmd_help()
+
+    def action_restart_agent(self) -> None:
+        self._cmd_restart()
 
     def action_export_chat(self) -> None:
         self.push_screen(ExportScreen(self._build_plain_transcript()))

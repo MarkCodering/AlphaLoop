@@ -136,3 +136,21 @@ async def test_set_provider_and_key_commands_update_config(stub_runner: None) ->
 
     assert cfg.provider == "openai"
     assert cfg.openai_api_key == "sk-test-key"
+
+
+def test_unknown_command_suggests_closest(stub_runner: None) -> None:
+    app = AlphaLoopApp(config=Config())
+
+    suggestion = app._suggest_unknown_command("/modles")
+
+    assert "maybe /models" in suggestion
+
+
+def test_command_registry_includes_palette_and_provider_commands() -> None:
+    from alphaloop.tui import _COMMANDS
+
+    names = {name for name, _ in _COMMANDS}
+
+    assert "/palette" in names
+    assert "/provider" in names
+    assert "/providers" in names
