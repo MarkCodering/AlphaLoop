@@ -1,6 +1,6 @@
 # AlphaLoop
 
-> A 24/7 autonomous deep agent — powered by local Ollama models, secured by a hard-gated sandbox, kept alive by a heartbeat monitor.
+> A 24/7 autonomous deep agent with pluggable model providers (Ollama, OpenAI, Anthropic, Gemini, Ollama Cloud), secured by a hard-gated sandbox, kept alive by a heartbeat monitor.
 
 Built on [deepagents](https://github.com/langchain-ai/deepagents) + [LangGraph](https://github.com/langchain-ai/langgraph).
 
@@ -11,7 +11,7 @@ Built on [deepagents](https://github.com/langchain-ai/deepagents) + [LangGraph](
 | | |
 |---|---|
 | **Heartbeat loop** | Pings the agent every 30s. Auto-restarts after 3 consecutive failures. Sends autonomous "pulse" prompts so the agent reasons without human input. |
-| **Local Ollama models** | Plug in any model — `lfm2.5-thinking:1.2b`, Llama, Gemma, Phi. Zero API cost, zero data leakage. |
+| **Multi-provider LLM support** | Use `ollama`, `openai`, `anthropic`, `gemini`, or `ollama_cloud` with provider-specific models and credentials. |
 | **Persistent memory** | SQLite checkpointer at `~/.alphaloop/checkpoints.db`. Same `thread_id` = memory across restarts. |
 | **Sandbox — restricted** | Command allowlist + `ulimit` + 30s timeout. Blocks `rm -rf`, `sudo`, `eval`, and 10+ dangerous patterns. |
 | **Sandbox — Docker** | Ephemeral container, `--network none`, 512MB RAM, PID limit. Full host isolation. |
@@ -23,7 +23,7 @@ Built on [deepagents](https://github.com/langchain-ai/deepagents) + [LangGraph](
 
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
-- [Ollama](https://ollama.com/) running locally
+- [Ollama](https://ollama.com/) running locally (only required for `ALPHALOOP_PROVIDER=ollama`)
 
 ---
 
@@ -36,7 +36,7 @@ git clone https://github.com/MarkCodering/AlphaLoop && cd AlphaLoop
 # 2. Install Python dependencies
 uv sync
 
-# 3. Pull the model
+# 3. (Optional) Pull a local Ollama model
 ollama pull lfm2.5-thinking:1.2b
 
 # 4. Launch
@@ -63,6 +63,7 @@ ollama pull lfm2.5-thinking:1.2b
 
 | Flag | Description |
 |------|-------------|
+| `--provider NAME` | Override model provider (`ollama`, `openai`, `anthropic`, `gemini`, `ollama_cloud`) |
 | `--model MODEL` | Override Ollama model (e.g. `gemma3:4b`) |
 | `--interval N` | Heartbeat interval in seconds (default: 30) |
 | `--thread ID` | Conversation thread ID (default: `alphaloop-main`) |
@@ -99,8 +100,16 @@ All config is via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ALPHALOOP_MODEL` | `lfm2.5-thinking:1.2b` | Ollama model |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
+| `ALPHALOOP_PROVIDER` | `ollama` | Provider (`ollama`, `openai`, `anthropic`, `gemini`, `ollama_cloud`) |
+| `ALPHALOOP_MODEL` | `lfm2.5-thinking:1.2b` | Provider model name |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Local Ollama URL (`provider=ollama`) |
+| `OPENAI_API_KEY` | *(unset)* | OpenAI API key (`provider=openai`) |
+| `OPENAI_BASE_URL` | *(unset)* | Optional OpenAI-compatible base URL (`provider=openai`) |
+| `ANTHROPIC_API_KEY` | *(unset)* | Anthropic API key (`provider=anthropic`) |
+| `GOOGLE_API_KEY` | *(unset)* | Gemini API key (`provider=gemini`) |
+| `GEMINI_API_KEY` | *(unset)* | Alternate Gemini API key env var (`provider=gemini`) |
+| `OLLAMA_API_KEY` | *(unset)* | Ollama Cloud API key (`provider=ollama_cloud`) |
+| `OLLAMA_CLOUD_BASE_URL` | `https://ollama.com` | Ollama Cloud host (`provider=ollama_cloud`) |
 | `ALPHALOOP_HEARTBEAT_INTERVAL` | `30` | Seconds between heartbeats |
 | `ALPHALOOP_HEARTBEAT_TIMEOUT` | `60` | Max seconds to wait for agent response |
 | `ALPHALOOP_MAX_HEARTBEAT_FAILURES` | `3` | Consecutive failures before restart |
@@ -116,10 +125,63 @@ All config is via environment variables:
 Example:
 
 ```bash
+ALPHALOOP_PROVIDER=ollama \
 ALPHALOOP_MODEL=gemma3:4b \
 ALPHALOOP_HEARTBEAT_INTERVAL=60 \
 ./run.sh tui
 ```
+
+OpenAI example:
+
+```bash
+ALPHALOOP_PROVIDER=openai \
+OPENAI_API_KEY=sk-... \
+ALPHALOOP_MODEL=gpt-4.1-mini \
+./run.sh tui
+```
+
+Anthropic example:
+
+```bash
+ALPHALOOP_PROVIDER=anthropic \
+ANTHROPIC_API_KEY=... \
+ALPHALOOP_MODEL=claude-3-5-sonnet-latest \
+./run.sh start
+```
+
+Gemini example:
+
+```bash
+ALPHALOOP_PROVIDER=gemini \
+GOOGLE_API_KEY=... \
+ALPHALOOP_MODEL=gemini-2.0-flash \
+./run.sh tui
+```
+
+Ollama Cloud API example:
+
+```bash
+ALPHALOOP_PROVIDER=ollama_cloud \
+OLLAMA_API_KEY=... \
+ALPHALOOP_MODEL=gpt-oss:120b \
+./run.sh start
+```
+
+## TUI Provider Config
+
+You can switch providers at runtime directly inside the TUI:
+
+- `/providers` shows supported providers.
+- `/set provider <name>` switches provider and restarts the agent.
+- `/set model <name>` sets the model for the current provider.
+- `/set key <token>` sets the API key for the current provider.
+- `/set endpoint <url>` sets endpoint for `ollama`, `openai`, or `ollama_cloud`.
+- `/provider` shows current provider, endpoint, and key status.
+
+Notes:
+
+- `/models` picker only works for local Ollama (`provider=ollama`).
+- For non-Ollama providers, set model names manually via `/set model ...`.
 
 ---
 
@@ -161,7 +223,7 @@ npm run build   # production build → web/dist/
 │                                                      │
 │  ┌──────────────────┐    ┌─────────────────────┐    │
 │  │  HeartbeatMonitor│    │  Agent (LangGraph)   │    │
-│  │  ── tick every   │───▶│  ── ChatOllama       │    │
+│  │  ── tick every   │───▶│  ── Provider model   │    │
 │  │     30s          │    │  ── deepagents tools │    │
 │  │  ── ping (health)│    │  ── SQLite memory    │    │
 │  │  ── pulse (task) │    │  ── Sandbox backend  │    │

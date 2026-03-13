@@ -7,9 +7,6 @@ from contextlib import AsyncExitStack
 from typing import Any
 
 from langchain_core.messages import HumanMessage
-from langchain_anthropic import ChatAnthropic
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph.state import CompiledStateGraph
@@ -41,6 +38,8 @@ def _build_model(config: Config) -> Any:
         )
 
     if provider == "openai":
+        from langchain_openai import ChatOpenAI
+
         if not config.openai_api_key:
             raise ValueError("OPENAI_API_KEY is required when ALPHALOOP_PROVIDER=openai")
         kwargs: dict[str, Any] = {
@@ -54,6 +53,8 @@ def _build_model(config: Config) -> Any:
         return ChatOpenAI(**kwargs)
 
     if provider == "anthropic":
+        from langchain_anthropic import ChatAnthropic
+
         if not config.anthropic_api_key:
             raise ValueError("ANTHROPIC_API_KEY is required when ALPHALOOP_PROVIDER=anthropic")
         return ChatAnthropic(
@@ -64,6 +65,8 @@ def _build_model(config: Config) -> Any:
         )
 
     if provider == "gemini":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
         if not config.gemini_api_key:
             raise ValueError("GOOGLE_API_KEY (or GEMINI_API_KEY) is required when ALPHALOOP_PROVIDER=gemini")
         return ChatGoogleGenerativeAI(
@@ -74,6 +77,8 @@ def _build_model(config: Config) -> Any:
         )
 
     if provider == "ollama_cloud":
+        from langchain_openai import ChatOpenAI
+
         if not config.ollama_api_key:
             raise ValueError("OLLAMA_API_KEY is required when ALPHALOOP_PROVIDER=ollama_cloud")
         return ChatOpenAI(
