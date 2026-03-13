@@ -95,7 +95,7 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/providers",        "List supported providers"),
     ("/models",           "Open interactive model picker (Ollama)"),
     ("/set provider",     "Switch provider  · /set provider <name>"),
-    ("/set model",        "Switch Ollama model  · /set model <name>"),
+    ("/set model",        "Switch model  · /set model <name>"),
     ("/set endpoint",     "Set provider endpoint  · /set endpoint <url>"),
     ("/set key",          "Set provider API key  · /set key <token>"),
     ("/mcp list",         "List connected MCP servers"),
