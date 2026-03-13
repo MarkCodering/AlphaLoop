@@ -163,6 +163,7 @@ class StatusBar(Static):
     uptime:   reactive[float] = reactive(100.0)
     failures: reactive[int]   = reactive(0)
     mcp_count: reactive[int]  = reactive(0)
+    mcp_tools: reactive[int]  = reactive(0)
 
     def __init__(self, config: Config, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -185,6 +186,9 @@ class StatusBar(Static):
         if self.mcp_count:
             t.append("  │  mcp=",          style="bright_black")
             t.append(str(self.mcp_count),  style="bright_green")
+            if self.mcp_tools:
+                t.append(" tools=", style="bright_black")
+                t.append(str(self.mcp_tools), style="bright_green")
         return t
 
 
@@ -1076,6 +1080,8 @@ class AlphaLoopApp(App[None]):
             self._cmd_providers()
         elif cmd in ("/models", "/model"):
             self._open_model_picker()
+        elif two == "/copy chat":
+            self.action_copy_chat()
         elif cmd == "/copy":
             self.action_copy_last()
         elif cmd == "/paste":
@@ -1092,8 +1098,6 @@ class AlphaLoopApp(App[None]):
                 self._cmd_set_model(name)
             else:
                 self._open_model_picker()
-        elif two == "/copy chat":
-            self.action_copy_chat()
         elif two == "/set provider":
             name = parts[2] if len(parts) > 2 else ""
             if name:
@@ -1869,6 +1873,7 @@ class _BackgroundRunner:
     async def _boot(self) -> None:
         from alphaloop.agent import create_agent
         from alphaloop.mcp import read_mcp_connections
+        from alphaloop.skills import get_enabled_tools
 
         self._app.post_message(StatusUpdate("Booting agent…"))
         try:
@@ -1883,7 +1888,18 @@ class _BackgroundRunner:
 
         # Update status bar MCP count
         mcp_servers = read_mcp_connections(self._cfg)
-        self._app.query_one("#status-bar", StatusBar).mcp_count = len(mcp_servers)
+        status_bar = self._app.query_one("#status-bar", StatusBar)
+        status_bar.mcp_count = len(mcp_servers)
+
+        # Approximate exposed MCP tools: total skills + MCP tools loaded into graph.
+        # create_agent wires all tools as [mcp_tools + skill_tools].
+        skill_count = len(get_enabled_tools())
+        try:
+            graph_tools = getattr(self._graph, "tools", None)
+            total_tool_count = len(graph_tools) if graph_tools is not None else 0
+            status_bar.mcp_tools = max(total_tool_count - skill_count, 0)
+        except Exception:
+            status_bar.mcp_tools = 0
 
         parts = [f"Ready  provider={self._cfg.provider}", f"model={self._cfg.model}"]
         if self._cfg.sandbox_enabled:
@@ -1891,6 +1907,8 @@ class _BackgroundRunner:
             parts.append(f"sandbox={mode}")
         if mcp_servers:
             parts.append(f"mcp=[{', '.join(mcp_servers)}]")
+            if status_bar.mcp_tools:
+                parts.append(f"mcp_tools={status_bar.mcp_tools}")
         self._app.post_message(StatusUpdate("  ".join(parts), level="ok"))
 
         self._monitor = _TuiHeartbeatMonitor(graph, self._cfg, self._app)

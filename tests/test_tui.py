@@ -145,6 +145,7 @@ async def test_set_provider_and_key_commands_update_config(stub_runner: None) ->
 
 def test_apply_provider_key_updates_openai_config() -> None:
     app = AlphaLoopApp(config=Config(provider="openai"))
+    app._append_chat = lambda *args, **kwargs: None
 
     ok = app._apply_provider_key("sk-test-key")
 
@@ -172,6 +173,7 @@ def test_command_registry_includes_palette_and_provider_commands() -> None:
 
 def test_copy_chat_command_calls_copy_chat(stub_runner: None, monkeypatch: pytest.MonkeyPatch) -> None:
     app = AlphaLoopApp(config=Config())
+    app._append_chat = lambda *args, **kwargs: None
     called = {"value": False}
 
     def _copy_chat() -> None:
@@ -223,6 +225,7 @@ def test_set_key_without_token_opens_prompt_for_non_ollama(monkeypatch: pytest.M
 
 def test_set_key_with_inline_token_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     app = AlphaLoopApp(config=Config(provider="openai"))
+    app._append_chat = lambda *args, **kwargs: None
     called = {"value": False}
 
     def _open_prompt() -> None:
