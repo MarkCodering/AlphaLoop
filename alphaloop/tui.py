@@ -91,8 +91,8 @@ class StatusBar(Static):
     tick: reactive[int] = reactive(0)
     uptime: reactive[float] = reactive(100.0)
 
-    def __init__(self, config: Config) -> None:
-        super().__init__()
+    def __init__(self, config: Config, **kwargs) -> None:
+        super().__init__(**kwargs)
         self._cfg = config
 
     def render(self) -> Text:
