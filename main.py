@@ -79,8 +79,11 @@ def send(message: str, thread: str | None) -> None:
     cfg = Config()
 
     async def _run() -> str:
-        graph, _ = create_agent(cfg)
-        return await invoke_agent(graph, message, cfg.thread_id)
+        graph, _, stack = await create_agent(cfg)
+        try:
+            return await invoke_agent(graph, message, cfg.thread_id)
+        finally:
+            await stack.aclose()
 
     reply = asyncio.run(_run())
     console.print(reply)

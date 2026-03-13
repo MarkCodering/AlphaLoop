@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import signal
 import sys
+from contextlib import AsyncExitStack
 from typing import Any
 
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -35,6 +36,7 @@ class Runner:
         self._cfg = config or get_config()
         self._graph: CompiledStateGraph | None = None
         self._checkpointer: AsyncSqliteSaver | None = None
+        self._agent_stack: AsyncExitStack | None = None
         self._monitor: HeartbeatMonitor | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
         self._running = False
@@ -66,6 +68,8 @@ class Runner:
                 await self._heartbeat_task
             except asyncio.CancelledError:
                 pass
+            self._heartbeat_task = None
+        await self._close_agent()
 
     async def send(self, message: str) -> str:
         """Inject an ad-hoc message into the running agent.
@@ -89,7 +93,8 @@ class Runner:
         log_event(logger, "runner.boot")
 
         # Build agent + checkpointer
-        self._graph, self._checkpointer = create_agent(self._cfg)
+        await self._close_agent()
+        self._graph, self._checkpointer, self._agent_stack = await create_agent(self._cfg)
 
         # Wire up heartbeat with restart callback
         self._monitor = HeartbeatMonitor(
@@ -121,6 +126,14 @@ class Runner:
                     logger.exception("Heartbeat task died: %s", exc)
                     await self._restart_agent()
             await asyncio.sleep(1)
+
+    async def _close_agent(self) -> None:
+        """Close agent resources held by the current saver context."""
+        if self._agent_stack is not None:
+            await self._agent_stack.aclose()
+            self._agent_stack = None
+        self._graph = None
+        self._checkpointer = None
 
     def _install_signal_handlers(self) -> None:
         """Register SIGINT/SIGTERM handlers for graceful shutdown."""

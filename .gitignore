@@ -45,6 +45,11 @@ htmlcov/
 *.svg
 __snapshots__/
 
+# Web / Node
+web/node_modules/
+web/dist/
+web/.vite/
+
 # Secrets
 .env
 .env.*

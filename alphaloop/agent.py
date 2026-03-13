@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 from typing import Any
 
 from langchain_core.messages import HumanMessage
@@ -28,52 +29,62 @@ def _build_ollama_model(config: Config) -> ChatOllama:
     )
 
 
-def create_agent(config: Config | None = None) -> tuple[CompiledStateGraph, AsyncSqliteSaver]:
+async def create_agent(
+    config: Config | None = None,
+) -> tuple[CompiledStateGraph, AsyncSqliteSaver, AsyncExitStack]:
     """Build and return a compiled deepagent + its checkpointer.
 
     The checkpointer is returned separately so the caller can use it as an
-    async context manager when running the agent.
+    active saver while the returned exit stack owns the underlying SQLite
+    connection lifecycle.
 
     Args:
         config: Runtime config. Defaults to the module-level singleton.
 
     Returns:
-        A ``(compiled_graph, checkpointer)`` pair.
+        A ``(compiled_graph, checkpointer, exit_stack)`` tuple.
     """
     from deepagents import create_deep_agent  # deferred — heavy import
 
     cfg = config or get_config()
     model = _build_ollama_model(cfg)
-    checkpointer = AsyncSqliteSaver.from_conn_string(str(cfg.checkpoint_db))
-
-    log_event(logger, "agent.build", model=cfg.model, db=str(cfg.checkpoint_db))
-
-    # Optionally attach a sandbox backend for safe shell execution
-    backend = None
-    if cfg.sandbox_enabled:
-        from alphaloop.sandbox import build_sandbox  # deferred — avoids import at module level
-
-        sandbox = build_sandbox(
-            use_docker=cfg.sandbox_use_docker,
-            work_dir=cfg.work_dir,
-            docker_image=cfg.sandbox_docker_image,
-            timeout=cfg.sandbox_timeout,
-        )
-        backend = sandbox
-        log_event(
-            logger,
-            "agent.sandbox",
-            type="docker" if cfg.sandbox_use_docker else "restricted-local",
-            id=sandbox.id,
+    stack = AsyncExitStack()
+    try:
+        checkpointer = await stack.enter_async_context(
+            AsyncSqliteSaver.from_conn_string(str(cfg.checkpoint_db))
         )
 
-    graph = create_deep_agent(
-        model=model,
-        system_prompt=cfg.system_prompt,
-        checkpointer=checkpointer,
-        backend=backend,
-    )
-    return graph, checkpointer
+        log_event(logger, "agent.build", model=cfg.model, db=str(cfg.checkpoint_db))
+
+        # Optionally attach a sandbox backend for safe shell execution
+        backend = None
+        if cfg.sandbox_enabled:
+            from alphaloop.sandbox import build_sandbox  # deferred — avoids import at module level
+
+            sandbox = build_sandbox(
+                use_docker=cfg.sandbox_use_docker,
+                work_dir=cfg.work_dir,
+                docker_image=cfg.sandbox_docker_image,
+                timeout=cfg.sandbox_timeout,
+            )
+            backend = sandbox
+            log_event(
+                logger,
+                "agent.sandbox",
+                type="docker" if cfg.sandbox_use_docker else "restricted-local",
+                id=sandbox.id,
+            )
+
+        graph = create_deep_agent(
+            model=model,
+            system_prompt=cfg.system_prompt,
+            checkpointer=checkpointer,
+            backend=backend,
+        )
+        return graph, checkpointer, stack
+    except Exception:
+        await stack.aclose()
+        raise
 
 
 async def invoke_agent(

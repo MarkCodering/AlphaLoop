@@ -323,6 +323,7 @@ class _BackgroundRunner:
         self._cfg = config
         self._app = app
         self._graph = None
+        self._agent_stack = None
         self._monitor: HeartbeatMonitor | None = None
         self._hb_task: asyncio.Task | None = None
 
@@ -334,8 +335,9 @@ class _BackgroundRunner:
         from alphaloop.agent import create_agent
 
         self._app.post_message(StatusUpdate("Booting agent…"))
-        graph, _ = create_agent(self._cfg)
+        graph, _, stack = await create_agent(self._cfg)
         self._graph = graph
+        self._agent_stack = stack
         self._app.post_message(StatusUpdate(f"Agent ready ({self._cfg.model})"))
 
         # Patch monitor to forward events to Textual
@@ -358,6 +360,10 @@ class _BackgroundRunner:
                 await self._hb_task
             except asyncio.CancelledError:
                 pass
+            self._hb_task = None
+        if self._agent_stack is not None:
+            await self._agent_stack.aclose()
+            self._agent_stack = None
 
 
 class _TuiHeartbeatMonitor(HeartbeatMonitor):
