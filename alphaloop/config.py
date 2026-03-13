@@ -7,6 +7,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+def _default_mcp_config() -> Path | None:
+    env = os.getenv("ALPHALOOP_MCP_CONFIG")
+    if env:
+        return Path(env).expanduser()
+    default = Path("~/.alphaloop/mcp.json").expanduser()
+    return default if default.exists() else None
+
+
 @dataclass
 class Config:
     """Central config read from environment variables with sane defaults."""
@@ -78,6 +86,12 @@ class Config:
     )
     sandbox_timeout: int = field(
         default_factory=lambda: int(os.getenv("ALPHALOOP_SANDBOX_TIMEOUT", "30"))
+    )
+
+    # MCP servers config file (JSON mapping of server-name → connection spec).
+    # Defaults to ~/.alphaloop/mcp.json if it exists; override with ALPHALOOP_MCP_CONFIG.
+    mcp_config: Path | None = field(
+        default_factory=lambda: _default_mcp_config()
     )
 
     def __post_init__(self) -> None:

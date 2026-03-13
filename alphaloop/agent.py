@@ -75,8 +75,13 @@ async def create_agent(
                 id=sandbox.id,
             )
 
+        from alphaloop.mcp import load_mcp_tools
+
+        mcp_tools = await load_mcp_tools(cfg)
+
         graph = create_deep_agent(
             model=model,
+            tools=mcp_tools or None,
             system_prompt=cfg.system_prompt,
             checkpointer=checkpointer,
             backend=backend,
