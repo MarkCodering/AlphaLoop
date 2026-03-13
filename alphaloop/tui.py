@@ -200,6 +200,64 @@ class ChatLog(RichLog):
     can_focus = True
 
 
+class HistoryInput(Input):
+    """Input widget with ↑/↓ message history navigation.
+
+    Overrides ``_on_key`` so that Up/Down are intercepted *before* Textual's
+    Input handler processes them (which would otherwise consume or ignore them
+    without bubbling to the App).
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._history: list[str] = []
+        self._history_idx: int = -1
+        self._history_draft: str = ""
+
+    def push_history(self, text: str) -> None:
+        """Record a sent message in history and reset the cursor."""
+        if not self._history or self._history[-1] != text:
+            self._history.append(text)
+        self._history_idx = -1
+        self._history_draft = ""
+
+    async def _on_key(self, event: Key) -> None:
+        if event.key == "up":
+            self._go_up()
+            event.prevent_default()
+            event.stop()
+            return
+        if event.key == "down":
+            self._go_down()
+            event.prevent_default()
+            event.stop()
+            return
+        await super()._on_key(event)
+
+    def _go_up(self) -> None:
+        if not self._history:
+            return
+        if self._history_idx == -1:
+            self._history_draft = self.value
+            self._history_idx = len(self._history) - 1
+        elif self._history_idx > 0:
+            self._history_idx -= 1
+        self.value = self._history[self._history_idx]
+        self.cursor_position = len(self.value)
+
+    def _go_down(self) -> None:
+        if self._history_idx == -1:
+            return
+        if self._history_idx < len(self._history) - 1:
+            self._history_idx += 1
+            self.value = self._history[self._history_idx]
+        else:
+            self._history_idx = -1
+            self.value = self._history_draft
+            self._history_draft = ""
+        self.cursor_position = len(self.value)
+
+
 class CommandPreview(Static):
     """Floating command palette shown when the user types '/'."""
 
@@ -611,7 +669,6 @@ class AlphaLoopApp(App[None]):
         Binding("ctrl+m", "open_models",     "Models"),
         Binding("ctrl+y", "copy_last",       "Copy"),
         Binding("ctrl+e", "export_chat",     "Export"),
-        Binding("ctrl+v", "paste_to_input",  "Paste", show=False),
         Binding("escape", "dismiss_preview", show=False),
     ]
 
@@ -620,10 +677,6 @@ class AlphaLoopApp(App[None]):
         self._cfg = config or get_config()
         self._runner: _BackgroundRunner | None = None
         self._recent_messages: deque[tuple[str, str]] = deque(maxlen=200)
-        # Input history (sent messages only, newest last)
-        self._input_history: list[str] = []
-        self._history_idx: int = -1       # -1 = "current draft" position
-        self._history_draft: str = ""     # saved draft while browsing history
 
     # ------------------------------------------------------------------
     # Compose
@@ -643,7 +696,7 @@ class AlphaLoopApp(App[None]):
         yield CommandPreview(id="cmd-preview")
         with Horizontal(id="input-row"):
             yield Static("▶", id="prompt-label")
-            yield Input(placeholder="Message or /help for commands…", id="user-input")
+            yield HistoryInput(placeholder="Message or /help for commands…", id="user-input")
         yield Footer()
 
     # ------------------------------------------------------------------
@@ -654,7 +707,7 @@ class AlphaLoopApp(App[None]):
         setup_logging("WARNING")
         self._runner = _BackgroundRunner(self._cfg, self)
         self._runner.start_all()
-        self.query_one("#user-input", Input).focus()
+        self.query_one("#user-input", HistoryInput).focus()
 
     async def on_unmount(self) -> None:
         if self._runner:
@@ -678,23 +731,19 @@ class AlphaLoopApp(App[None]):
         text = event.value.strip()
         if not text:
             return
+        inp = self.query_one("#user-input", HistoryInput)
         event.input.clear()
         self.query_one("#cmd-preview", CommandPreview).display = False
-        # Reset history navigation on submit
-        self._history_idx   = -1
-        self._history_draft = ""
         if text.startswith("/"):
             self._handle_slash_command(text)
         else:
-            # Push to history (avoid consecutive duplicates)
-            if not self._input_history or self._input_history[-1] != text:
-                self._input_history.append(text)
+            inp.push_history(text)
             self._append_chat("you", text)
             self._send_message(text)
 
     def on_key(self, event: Key) -> None:
         preview = self.query_one("#cmd-preview", CommandPreview)
-        inp     = self.query_one("#user-input", Input)
+        inp     = self.query_one("#user-input", HistoryInput)
 
         if preview.display:
             # Command preview is open — Up/Down/Tab/Escape control it
@@ -718,24 +767,19 @@ class AlphaLoopApp(App[None]):
 
         chat_log = self.query_one("#chat-log", ChatLog)
 
-        # When chat panel is focused: Ctrl+C copies last message, Ctrl+V pastes to input
+        # Ctrl+V: paste into input from anywhere except when the input itself has focus
+        # (when input is focused, its native Ctrl+V paste handler works unblocked)
+        if event.key == "ctrl+v" and self.focused is not inp:
+            self.action_paste_to_input()
+            event.prevent_default()
+            return
+
+        # When chat panel is focused: Ctrl+C copies last message
         if self.focused is chat_log:
-            if event.key == "ctrl+v":
-                self.action_paste_to_input()
-                event.prevent_default()
-            elif event.key == "ctrl+c":
+            if event.key == "ctrl+c":
                 self.action_copy_last()
                 event.prevent_default()
             return
-
-        # No preview — Up/Down browse input history (only when input is focused)
-        if self.focused is inp:
-            if event.key == "up":
-                self._history_up(inp)
-                event.prevent_default()
-            elif event.key == "down":
-                self._history_down(inp)
-                event.prevent_default()
 
     # ------------------------------------------------------------------
     # /command dispatcher
@@ -1092,7 +1136,7 @@ class AlphaLoopApp(App[None]):
 
     def action_paste_to_input(self) -> None:
         """Paste clipboard text into the input field (works from anywhere)."""
-        inp = self.query_one("#user-input", Input)
+        inp = self.query_one("#user-input", HistoryInput)
         text = self._clipboard_paste()
         if not text:
             return
@@ -1107,7 +1151,7 @@ class AlphaLoopApp(App[None]):
         if preview.display:
             preview.display = False
         else:
-            self.query_one("#user-input", Input).blur()
+            self.query_one("#user-input", HistoryInput).blur()
 
     def action_copy_last(self) -> None:
         """Copy the most recent agent/pulse response to the system clipboard."""
@@ -1120,34 +1164,6 @@ class AlphaLoopApp(App[None]):
                 return
         self._append_chat("sys", "No agent response to copy yet.")
 
-    # ------------------------------------------------------------------
-    # Input history helpers
-    # ------------------------------------------------------------------
-
-    def _history_up(self, inp: Input) -> None:
-        if not self._input_history:
-            return
-        if self._history_idx == -1:
-            # Save whatever is currently typed as the draft
-            self._history_draft = inp.value
-            self._history_idx   = len(self._input_history) - 1
-        elif self._history_idx > 0:
-            self._history_idx -= 1
-        inp.value          = self._input_history[self._history_idx]
-        inp.cursor_position = len(inp.value)
-
-    def _history_down(self, inp: Input) -> None:
-        if self._history_idx == -1:
-            return
-        if self._history_idx < len(self._input_history) - 1:
-            self._history_idx  += 1
-            inp.value           = self._input_history[self._history_idx]
-        else:
-            # Reached the bottom — restore the draft
-            self._history_idx   = -1
-            inp.value           = self._history_draft
-            self._history_draft = ""
-        inp.cursor_position = len(inp.value)
 
     # ------------------------------------------------------------------
     # Clipboard helper
