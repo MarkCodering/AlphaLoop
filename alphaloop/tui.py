@@ -23,6 +23,8 @@ from collections import deque
 from pathlib import Path
 from typing import ClassVar
 
+from rich.markdown import Markdown
+from rich.padding import Padding
 from rich.text import Text
 from textual import on, work
 from textual.app import App, ComposeResult
@@ -543,7 +545,7 @@ class AlphaLoopApp(App[None]):
         with Horizontal(id="main-layout"):
             with Vertical(id="chat-panel"):
                 yield Static("  CHAT", id="chat-header")
-                yield RichLog(id="chat-log", highlight=False, markup=True, wrap=True)
+                yield RichLog(id="chat-log", highlight=False, markup=False, wrap=True)
             with Vertical(id="sidebar"):
                 yield HbStats(id="hb-stats")
                 yield Static("  HEARTBEAT LOG", id="sidebar-log-header")
@@ -671,13 +673,13 @@ class AlphaLoopApp(App[None]):
 
     def _cmd_help(self) -> None:
         log = self.query_one("#chat-log", RichLog)
-        log.write(Text.from_markup(
-            "[bright_yellow]── Commands ─────────────────────────────────────[/bright_yellow]\n"
-        ))
+        title = Text("── Commands ─────────────────────────────────────\n", style="bright_yellow")
+        log.write(title)
         for cmd, desc in _COMMANDS:
-            log.write(Text.from_markup(
-                f"  [cyan]{cmd:<20}[/cyan] [bright_black]{desc}[/bright_black]\n"
-            ))
+            row = Text()
+            row.append(f"  {cmd:<22}", style="cyan")
+            row.append(desc + "\n",   style="bright_black")
+            log.write(row)
 
     def _cmd_status(self) -> None:
         from alphaloop.mcp import read_mcp_connections
@@ -695,13 +697,12 @@ class AlphaLoopApp(App[None]):
             ("mcp",        ", ".join(mcp) if mcp else "none"),
             ("checkpoint", str(self._cfg.checkpoint_db)),
         ]
-        log.write(Text.from_markup(
-            "[bright_yellow]── Status ───────────────────────────────────────[/bright_yellow]\n"
-        ))
+        log.write(Text("── Status ───────────────────────────────────────\n", style="bright_yellow"))
         for key, val in rows:
-            log.write(Text.from_markup(
-                f"  [bright_black]{key:<14}[/bright_black] [white]{val}[/white]\n"
-            ))
+            row = Text()
+            row.append(f"  {key:<16}", style="bright_black")
+            row.append(val + "\n",    style="white")
+            log.write(row)
 
     def _cmd_sandbox(self) -> None:
         if self._cfg.sandbox_enabled:
@@ -742,7 +743,7 @@ class AlphaLoopApp(App[None]):
     def _cmd_set_model(self, name: str) -> None:
         self._cfg.model = name
         self.query_one("#app-header", AppHeader).model_name = name
-        self._append_chat("sys", f"Model → [cyan]{name}[/cyan]  restarting agent…")
+        self._append_chat("sys", f"Model → {name}  restarting agent…")
         self.post_message(AgentRestart())
 
     def _cmd_mcp_list(self) -> None:
@@ -750,22 +751,21 @@ class AlphaLoopApp(App[None]):
         servers = read_mcp_connections(self._cfg)
         log = self.query_one("#chat-log", RichLog)
         if not servers:
-            log.write(Text.from_markup(
-                "  [bright_black]No MCP servers configured.  "
-                "Use[/bright_black] [cyan]/mcp add <name> <url>[/cyan]\n"
-            ))
+            row = Text()
+            row.append("  No MCP servers configured.  Use ", style="bright_black")
+            row.append("/mcp add <name> <url>",              style="cyan")
+            row.append("\n")
+            log.write(row)
             return
-        log.write(Text.from_markup(
-            "[bright_yellow]── MCP Servers ──────────────────────────────────[/bright_yellow]\n"
-        ))
+        log.write(Text("── MCP Servers ──────────────────────────────────\n", style="bright_yellow"))
         for name, spec in servers.items():
             transport = spec.get("transport", "?")
             url = spec.get("url") or spec.get("command", "")
-            log.write(Text.from_markup(
-                f"  [cyan]{name:<16}[/cyan]"
-                f" [bright_black]{transport}[/bright_black]"
-                f" [white]{url}[/white]\n"
-            ))
+            row = Text()
+            row.append(f"  {name:<18}", style="cyan")
+            row.append(f"{transport:<8}", style="bright_black")
+            row.append(url + "\n",       style="white")
+            log.write(row)
 
     def _cmd_mcp_add(self, args: list[str]) -> None:
         """Usage: /mcp add <name> <url> [transport=http|sse|stdio]"""
@@ -784,7 +784,7 @@ class AlphaLoopApp(App[None]):
 
         # Refresh status bar count
         self.query_one("#status-bar", StatusBar).mcp_count = len(connections)
-        self._append_chat("sys", f"Added MCP server [cyan]{name}[/cyan] ({transport} {url}) — restarting…")
+        self._append_chat("sys", f"Added MCP server '{name}' ({transport} {url}) — restarting…")
         self.post_message(AgentRestart())
 
     def _cmd_mcp_remove(self, name: str) -> None:
@@ -793,13 +793,13 @@ class AlphaLoopApp(App[None]):
             return
         connections = _read_mcp_file(self._cfg)
         if name not in connections:
-            self._append_chat("sys", f"Server [cyan]{name}[/cyan] not found")
+            self._append_chat("sys", f"Server '{name}' not found")
             return
         del connections[name]
         _write_mcp_file(self._cfg, connections)
 
         self.query_one("#status-bar", StatusBar).mcp_count = len(connections)
-        self._append_chat("sys", f"Removed MCP server [cyan]{name}[/cyan] — restarting…")
+        self._append_chat("sys", f"Removed MCP server '{name}' — restarting…")
         self.post_message(AgentRestart())
 
     # ------------------------------------------------------------------
@@ -879,6 +879,8 @@ class AlphaLoopApp(App[None]):
         "pulse": ("dim green",          "PULSE"),
         "sys":   ("bold bright_yellow", "SYS"),
     }
+    # Speakers whose content should be rendered as Markdown
+    _MARKDOWN_SPEAKERS: ClassVar[frozenset[str]] = frozenset({"agent", "pulse"})
 
     def _append_chat(self, speaker: str, text: str) -> None:
         self._recent_messages.append((speaker, text))
@@ -887,11 +889,25 @@ class AlphaLoopApp(App[None]):
     def _write_chat_line(self, log: RichLog, speaker: str, text: str) -> None:
         style, label = self._SPEAKER_STYLE.get(speaker, ("white", speaker.upper()))
         ts = time.strftime("%H:%M:%S")
-        log.write(Text.from_markup(
-            f"[bright_black]{ts}[/bright_black]  "
-            f"[{style}]{label}[/{style}]  "
-            f"[white]{text}[/white]\n"
-        ))
+
+        # Header row: timestamp + speaker badge
+        header = Text(no_wrap=True)
+        header.append(ts,     style="bright_black")
+        header.append("  ")
+        header.append(label,  style=style)
+        log.write(header)
+
+        if speaker in self._MARKDOWN_SPEAKERS and text not in ("…", "(no reply)"):
+            # Render body as Markdown, indented 2 spaces to align under the label
+            md = Markdown(text, code_theme="monokai", hyperlinks=False)
+            log.write(Padding(md, pad=(0, 0, 1, 2)))
+        else:
+            # Plain text for user input, sys messages, and placeholders
+            body = Text(no_wrap=False)
+            body.append("  ")
+            body.append(text, style="white" if speaker != "sys" else "bright_black")
+            body.append("\n")
+            log.write(body)
 
     def _rebuild_chat(self, replace_last: tuple[str, str] | None = None) -> None:
         log = self.query_one("#chat-log", RichLog)
