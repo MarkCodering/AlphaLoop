@@ -122,3 +122,17 @@ async def test_mcp_add_accepts_quoted_json_spec_and_preserves_wrapper(
     assert saved["mcpServers"]["existing"]["url"] == "https://mcp.notion.com/mcp"
     assert saved["mcpServers"]["github"]["transport"] == "http"
     assert saved["mcpServers"]["github"]["headers"]["Authorization"] == "Bearer ${input:github_mcp_pat}"
+
+
+@pytest.mark.asyncio
+async def test_set_provider_and_key_commands_update_config(stub_runner: None) -> None:
+    cfg = Config(provider="ollama", model="lfm2.5-thinking:1.2b")
+    app = AlphaLoopApp(config=cfg)
+
+    async with app.run_test():
+        app.post_message = lambda message: None
+        app._handle_slash_command("/set provider openai")
+        app._handle_slash_command("/set key sk-test-key")
+
+    assert cfg.provider == "openai"
+    assert cfg.openai_api_key == "sk-test-key"
