@@ -195,6 +195,11 @@ class HbStats(Static):
         return t
 
 
+class ChatLog(RichLog):
+    """RichLog that can receive keyboard focus (for scrolling and copy shortcuts)."""
+    can_focus = True
+
+
 class CommandPreview(Static):
     """Floating command palette shown when the user types '/'."""
 
@@ -630,8 +635,7 @@ class AlphaLoopApp(App[None]):
         with Horizontal(id="main-layout"):
             with Vertical(id="chat-panel"):
                 yield Static("  CHAT", id="chat-header")
-                yield RichLog(id="chat-log", highlight=False, markup=False, wrap=True,
-                              can_focus=True)
+                yield ChatLog(id="chat-log", highlight=False, markup=False, wrap=True)
             with Vertical(id="sidebar"):
                 yield HbStats(id="hb-stats")
                 yield Static("  HEARTBEAT LOG", id="sidebar-log-header")
@@ -712,7 +716,7 @@ class AlphaLoopApp(App[None]):
                 event.prevent_default()
             return
 
-        chat_log = self.query_one("#chat-log", RichLog)
+        chat_log = self.query_one("#chat-log", ChatLog)
 
         # When chat panel is focused: Ctrl+C copies last message, Ctrl+V pastes to input
         if self.focused is chat_log:
@@ -801,7 +805,7 @@ class AlphaLoopApp(App[None]):
             self._append_chat("sys", f"Unknown command: {text}  · type /help")
 
     def _cmd_help(self) -> None:
-        log = self.query_one("#chat-log", RichLog)
+        log = self.query_one("#chat-log", ChatLog)
         title = Text("── Commands ─────────────────────────────────────\n", style="bright_yellow")
         log.write(title)
         for cmd, desc in _COMMANDS:
@@ -814,7 +818,7 @@ class AlphaLoopApp(App[None]):
         from alphaloop.mcp import read_mcp_connections
         hb  = self.query_one("#status-bar", StatusBar)
         mcp = read_mcp_connections(self._cfg)
-        log = self.query_one("#chat-log", RichLog)
+        log = self.query_one("#chat-log", ChatLog)
         rows = [
             ("model",      self._cfg.model),
             ("thread",     self._cfg.thread_id),
@@ -878,7 +882,7 @@ class AlphaLoopApp(App[None]):
     def _cmd_mcp_list(self) -> None:
         from alphaloop.mcp import read_mcp_connections
         servers = read_mcp_connections(self._cfg)
-        log = self.query_one("#chat-log", RichLog)
+        log = self.query_one("#chat-log", ChatLog)
         if not servers:
             row = Text()
             row.append("  No MCP servers configured.  Use ", style="bright_black")
@@ -983,7 +987,7 @@ class AlphaLoopApp(App[None]):
     def _cmd_skills_list(self) -> None:
         from alphaloop.skills import REGISTRY, load_enabled
         enabled = load_enabled()
-        log = self.query_one("#chat-log", RichLog)
+        log = self.query_one("#chat-log", ChatLog)
         log.write(Text("── Skills ───────────────────────────────────────\n", style="bright_yellow"))
         for skill_name, info in REGISTRY.items():
             active = skill_name in enabled
@@ -1078,7 +1082,7 @@ class AlphaLoopApp(App[None]):
 
     def action_clear_chat(self) -> None:
         self._recent_messages.clear()
-        self.query_one("#chat-log", RichLog).clear()
+        self.query_one("#chat-log", ChatLog).clear()
 
     def action_open_models(self) -> None:
         self._open_model_picker()
@@ -1230,7 +1234,7 @@ class AlphaLoopApp(App[None]):
 
     def _append_chat(self, speaker: str, text: str) -> None:
         self._recent_messages.append((speaker, text))
-        self._write_chat_line(self.query_one("#chat-log", RichLog), speaker, text)
+        self._write_chat_line(self.query_one("#chat-log", ChatLog), speaker, text)
 
     def _write_chat_line(self, log: RichLog, speaker: str, text: str) -> None:
         style, label = self._SPEAKER_STYLE.get(speaker, ("white", speaker.upper()))
@@ -1256,7 +1260,7 @@ class AlphaLoopApp(App[None]):
             log.write(body)
 
     def _rebuild_chat(self, replace_last: tuple[str, str] | None = None) -> None:
-        log = self.query_one("#chat-log", RichLog)
+        log = self.query_one("#chat-log", ChatLog)
         log.clear()
         messages = list(self._recent_messages)
         if replace_last and messages:
