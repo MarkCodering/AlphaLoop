@@ -111,6 +111,7 @@ async def test_mcp_add_accepts_quoted_json_spec_and_preserves_wrapper(
     app = AlphaLoopApp(config=Config(mcp_config=path))
 
     async with app.run_test():
+        app.post_message = lambda message: None
         app._handle_slash_command(
             '/mcp add github \'{"url":"https://api.githubcopilot.com/mcp/","headers":{"Authorization":"Bearer ${input:github_mcp_pat}"}}\''
         )

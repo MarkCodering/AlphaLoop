@@ -13,6 +13,7 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         docs: resolve(__dirname, 'docs/index.html'),
+        mcp: resolve(__dirname, 'mcp/index.html'),
       },
     },
   },
