@@ -192,6 +192,46 @@ export default function AlphaLoopLanding() {
             <FeatureCard icon={ShieldCheck} title="Hard Sandbox"     description="Restricted local shell with command allowlist + ulimits, or full Docker isolation. Host system stays untouched." />
             <FeatureCard icon={Lock}        title="Air-Gapped"       description="Your codebase and sensitive data never leave your machine. SQLite persistence keeps memory across restarts." />
           </div>
+
+          {/* Sandbox spec table */}
+          <div className="mt-16 relative">
+            <div className="absolute -inset-px bg-gradient-to-b from-amber-500/10 to-transparent opacity-60 pointer-events-none" />
+            <div className="relative bg-[#050505] border border-zinc-800 p-8 md:p-10">
+              {/* corner marks */}
+              <div className="absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 border-amber-500" />
+              <div className="absolute top-0 right-0 w-2 h-2 border-t-2 border-r-2 border-amber-500" />
+              <div className="absolute bottom-0 left-0 w-2 h-2 border-b-2 border-l-2 border-amber-500" />
+              <div className="absolute bottom-0 right-0 w-2 h-2 border-b-2 border-r-2 border-amber-500" />
+
+              <div className="flex items-center justify-between border-b border-zinc-800 pb-6 mb-8">
+                <h3 className="text-sm font-mono font-bold tracking-widest uppercase text-zinc-300 flex items-center">
+                  <Lock className="w-4 h-4 mr-3 text-amber-500" />
+                  Perimeter Defenses
+                </h3>
+                <span className="text-[10px] font-mono tracking-widest text-red-500 uppercase px-2 py-1 border border-red-900/50 bg-red-950/20">Active</span>
+              </div>
+
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-x-12 gap-y-0 font-mono text-xs uppercase tracking-wide text-zinc-400">
+                {[
+                  ['Runtime Isolation',  'Docker API / Restricted Shell'],
+                  ['Network I/O',        'Terminated (--network none)'],
+                  ['Filesystem',         'Ephemeral Volume / Work Dir'],
+                  ['Compute Limits',     'CPU: ulimit | RAM: 512MB'],
+                  ['Command Allowlist',  'python3, git, grep, ls…'],
+                  ['Timeout',            '30s per command'],
+                ].map(([label, value], i) => (
+                  <div key={i} className="flex justify-between items-center py-4 border-b border-zinc-900 gap-4">
+                    <span className="text-zinc-600 font-bold shrink-0">{label}</span>
+                    <span className={
+                      value.includes('none') || value.includes('Terminated') ? 'text-red-400' :
+                      value.includes('ulimit') || value.includes('512') ? 'text-amber-500' :
+                      'text-zinc-300'
+                    }>{value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 
