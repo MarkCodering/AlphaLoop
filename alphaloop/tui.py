@@ -42,6 +42,7 @@ from textual.widgets import (
     OptionList,
     RichLog,
     Static,
+    TextArea,
 )
 from textual.widgets.option_list import Option
 
@@ -103,6 +104,8 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/skills off",       "Disable a skill  · /skills off <name>"),
     ("/mcp auth",         "Authenticate with an MCP server via OAuth  · /mcp auth <name>"),
     ("/mcp deauth",       "Remove stored OAuth token  · /mcp deauth <name>"),
+    ("/copy",             "Copy last AI response to clipboard  (also Ctrl+Y)"),
+    ("/export",           "Open full conversation in a selectable text view"),
     ("/thread",           "Show current thread ID"),
 ]
 
@@ -246,6 +249,73 @@ class CommandPreview(Static):
         n = min(len(self._matches), 10)
         self.styles.height = max(n, 0)
         self.display = n > 0
+
+
+# ---------------------------------------------------------------------------
+# Export / conversation view modal
+# ---------------------------------------------------------------------------
+
+
+class ExportScreen(ModalScreen[None]):
+    """Full-screen modal showing the raw conversation as selectable text."""
+
+    BINDINGS = [Binding("escape", "dismiss", "Close", show=True),
+                Binding("ctrl+a", "select_all", "Select all", show=True)]
+
+    CSS = """
+    ExportScreen {
+        align: center middle;
+    }
+    #export-dialog {
+        width: 90%;
+        height: 90%;
+        background: #0f0f12;
+        border: solid #f59e0b;
+        padding: 0;
+    }
+    #export-title {
+        height: 2;
+        background: #0f0f12;
+        color: #f59e0b;
+        text-style: bold;
+        content-align: center middle;
+        border-bottom: solid #27272a;
+    }
+    #export-hint {
+        height: 1;
+        background: #0f0f12;
+        color: #3f3f46;
+        content-align: center middle;
+        border-top: solid #27272a;
+    }
+    #export-area {
+        height: 1fr;
+        background: #08080a;
+        color: #a1a1aa;
+        border: none;
+    }
+    """
+
+    def __init__(self, transcript: str) -> None:
+        super().__init__()
+        self._transcript = transcript
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="export-dialog"):
+            yield Label("  CONVERSATION EXPORT", id="export-title")
+            area = TextArea(self._transcript, id="export-area", read_only=True)
+            yield area
+            yield Label(
+                "  Select text then Ctrl+C to copy  ·  Ctrl+A select all  ·  Esc close",
+                id="export-hint",
+            )
+
+    def on_mount(self) -> None:
+        self.query_one("#export-area", TextArea).focus()
+
+    def action_select_all(self) -> None:
+        area = self.query_one("#export-area", TextArea)
+        area.select_all()
 
 
 # ---------------------------------------------------------------------------
@@ -452,6 +522,9 @@ class AlphaLoopApp(App[None]):
         scrollbar-size: 1 1;
         scrollbar-gutter: stable;
     }}
+    #chat-log:focus {{
+        border: solid {_AMBER};
+    }}
 
     /* ── Sidebar ── */
     #sidebar {{
@@ -528,9 +601,12 @@ class AlphaLoopApp(App[None]):
     """
 
     BINDINGS: ClassVar[list[Binding]] = [
-        Binding("ctrl+c", "quit",          "Quit"),
-        Binding("ctrl+l", "clear_chat",    "Clear"),
-        Binding("ctrl+m", "open_models",   "Models"),
+        Binding("ctrl+c", "quit",            "Quit"),
+        Binding("ctrl+l", "clear_chat",      "Clear"),
+        Binding("ctrl+m", "open_models",     "Models"),
+        Binding("ctrl+y", "copy_last",       "Copy"),
+        Binding("ctrl+e", "export_chat",     "Export"),
+        Binding("ctrl+v", "paste_to_input",  "Paste", show=False),
         Binding("escape", "dismiss_preview", show=False),
     ]
 
@@ -539,6 +615,10 @@ class AlphaLoopApp(App[None]):
         self._cfg = config or get_config()
         self._runner: _BackgroundRunner | None = None
         self._recent_messages: deque[tuple[str, str]] = deque(maxlen=200)
+        # Input history (sent messages only, newest last)
+        self._input_history: list[str] = []
+        self._history_idx: int = -1       # -1 = "current draft" position
+        self._history_draft: str = ""     # saved draft while browsing history
 
     # ------------------------------------------------------------------
     # Compose
@@ -550,7 +630,8 @@ class AlphaLoopApp(App[None]):
         with Horizontal(id="main-layout"):
             with Vertical(id="chat-panel"):
                 yield Static("  CHAT", id="chat-header")
-                yield RichLog(id="chat-log", highlight=False, markup=False, wrap=True)
+                yield RichLog(id="chat-log", highlight=False, markup=False, wrap=True,
+                              can_focus=True)
             with Vertical(id="sidebar"):
                 yield HbStats(id="hb-stats")
                 yield Static("  HEARTBEAT LOG", id="sidebar-log-header")
@@ -595,33 +676,62 @@ class AlphaLoopApp(App[None]):
             return
         event.input.clear()
         self.query_one("#cmd-preview", CommandPreview).display = False
+        # Reset history navigation on submit
+        self._history_idx   = -1
+        self._history_draft = ""
         if text.startswith("/"):
             self._handle_slash_command(text)
         else:
+            # Push to history (avoid consecutive duplicates)
+            if not self._input_history or self._input_history[-1] != text:
+                self._input_history.append(text)
             self._append_chat("you", text)
             self._send_message(text)
 
     def on_key(self, event: Key) -> None:
         preview = self.query_one("#cmd-preview", CommandPreview)
-        inp = self.query_one("#user-input", Input)
-        if not preview.display:
+        inp     = self.query_one("#user-input", Input)
+
+        if preview.display:
+            # Command preview is open — Up/Down/Tab/Escape control it
+            if event.key == "up":
+                preview.move_up()
+                event.prevent_default()
+            elif event.key == "down":
+                preview.move_down()
+                event.prevent_default()
+            elif event.key == "tab":
+                cmd = preview.selected_command()
+                if cmd:
+                    inp.value          = cmd + " "
+                    inp.cursor_position = len(inp.value)
+                    preview.filter(cmd)
+                event.prevent_default()
+            elif event.key == "escape":
+                preview.display = False
+                event.prevent_default()
             return
-        if event.key == "up":
-            preview.move_up()
-            event.prevent_default()
-        elif event.key == "down":
-            preview.move_down()
-            event.prevent_default()
-        elif event.key == "tab":
-            cmd = preview.selected_command()
-            if cmd:
-                inp.value = cmd + " "
-                inp.cursor_position = len(inp.value)
-                preview.filter(cmd)
-            event.prevent_default()
-        elif event.key == "escape":
-            preview.display = False
-            event.prevent_default()
+
+        chat_log = self.query_one("#chat-log", RichLog)
+
+        # When chat panel is focused: Ctrl+C copies last message, Ctrl+V pastes to input
+        if self.focused is chat_log:
+            if event.key == "ctrl+v":
+                self.action_paste_to_input()
+                event.prevent_default()
+            elif event.key == "ctrl+c":
+                self.action_copy_last()
+                event.prevent_default()
+            return
+
+        # No preview — Up/Down browse input history (only when input is focused)
+        if self.focused is inp:
+            if event.key == "up":
+                self._history_up(inp)
+                event.prevent_default()
+            elif event.key == "down":
+                self._history_down(inp)
+                event.prevent_default()
 
     # ------------------------------------------------------------------
     # /command dispatcher
@@ -647,6 +757,10 @@ class AlphaLoopApp(App[None]):
             self._cmd_restart()
         elif cmd in ("/models", "/model"):
             self._open_model_picker()
+        elif cmd == "/copy":
+            self.action_copy_last()
+        elif cmd == "/export":
+            self.action_export_chat()
         elif cmd == "/thread":
             self._append_chat("sys", f"thread={self._cfg.thread_id}")
         elif two == "/set model":
@@ -969,12 +1083,137 @@ class AlphaLoopApp(App[None]):
     def action_open_models(self) -> None:
         self._open_model_picker()
 
+    def action_export_chat(self) -> None:
+        self.push_screen(ExportScreen(self._build_plain_transcript()))
+
+    def action_paste_to_input(self) -> None:
+        """Paste clipboard text into the input field (works from anywhere)."""
+        inp = self.query_one("#user-input", Input)
+        text = self._clipboard_paste()
+        if not text:
+            return
+        # Insert at cursor position
+        pos = inp.cursor_position
+        inp.value = inp.value[:pos] + text + inp.value[pos:]
+        inp.cursor_position = pos + len(text)
+        inp.focus()
+
     def action_dismiss_preview(self) -> None:
         preview = self.query_one("#cmd-preview", CommandPreview)
         if preview.display:
             preview.display = False
         else:
             self.query_one("#user-input", Input).blur()
+
+    def action_copy_last(self) -> None:
+        """Copy the most recent agent/pulse response to the system clipboard."""
+        for speaker, text in reversed(self._recent_messages):
+            if speaker in ("agent", "pulse") and text not in ("…", "(no reply)"):
+                if self._clipboard_copy(text):
+                    self._append_chat("sys", "Copied last response to clipboard.")
+                else:
+                    self._append_chat("sys", "Clipboard unavailable — see chat log for text.")
+                return
+        self._append_chat("sys", "No agent response to copy yet.")
+
+    # ------------------------------------------------------------------
+    # Input history helpers
+    # ------------------------------------------------------------------
+
+    def _history_up(self, inp: Input) -> None:
+        if not self._input_history:
+            return
+        if self._history_idx == -1:
+            # Save whatever is currently typed as the draft
+            self._history_draft = inp.value
+            self._history_idx   = len(self._input_history) - 1
+        elif self._history_idx > 0:
+            self._history_idx -= 1
+        inp.value          = self._input_history[self._history_idx]
+        inp.cursor_position = len(inp.value)
+
+    def _history_down(self, inp: Input) -> None:
+        if self._history_idx == -1:
+            return
+        if self._history_idx < len(self._input_history) - 1:
+            self._history_idx  += 1
+            inp.value           = self._input_history[self._history_idx]
+        else:
+            # Reached the bottom — restore the draft
+            self._history_idx   = -1
+            inp.value           = self._history_draft
+            self._history_draft = ""
+        inp.cursor_position = len(inp.value)
+
+    # ------------------------------------------------------------------
+    # Clipboard helper
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clipboard_copy(text: str) -> bool:
+        """Write *text* to the system clipboard. Returns True on success."""
+        import subprocess, sys
+        try:
+            if sys.platform == "darwin":
+                subprocess.run(["pbcopy"], input=text.encode(), check=True, timeout=3)
+                return True
+            if sys.platform.startswith("linux"):
+                for cmd in (["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]):
+                    try:
+                        subprocess.run(cmd, input=text.encode(), check=True, timeout=3)
+                        return True
+                    except FileNotFoundError:
+                        continue
+            if sys.platform == "win32":
+                subprocess.run(["clip"], input=text.encode("utf-16-le"), check=True, timeout=3)
+                return True
+        except Exception:
+            pass
+        # Last resort: pyperclip
+        try:
+            import pyperclip  # type: ignore[import]
+            pyperclip.copy(text)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _clipboard_paste() -> str:
+        """Read text from the system clipboard. Returns empty string on failure."""
+        import subprocess, sys
+        try:
+            if sys.platform == "darwin":
+                result = subprocess.run(["pbpaste"], capture_output=True, timeout=3)
+                return result.stdout.decode(errors="replace")
+            if sys.platform.startswith("linux"):
+                for cmd in (["xclip", "-selection", "clipboard", "-o"],
+                            ["xsel", "--clipboard", "--output"]):
+                    try:
+                        result = subprocess.run(cmd, capture_output=True, timeout=3)
+                        return result.stdout.decode(errors="replace")
+                    except FileNotFoundError:
+                        continue
+            if sys.platform == "win32":
+                result = subprocess.run(["powershell", "-command", "Get-Clipboard"],
+                                        capture_output=True, timeout=3)
+                return result.stdout.decode(errors="replace").strip()
+        except Exception:
+            pass
+        try:
+            import pyperclip  # type: ignore[import]
+            return pyperclip.paste()
+        except Exception:
+            return ""
+
+    def _build_plain_transcript(self) -> str:
+        """Render the conversation as a plain-text string for the export view."""
+        lines: list[str] = ["── AlphaLoop Conversation ──────────────────────────", ""]
+        for speaker, text in self._recent_messages:
+            _, label = self._SPEAKER_STYLE.get(speaker, ("", speaker.upper()))
+            lines.append(f"[{label}]")
+            lines.append(text)
+            lines.append("")
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # Chat helpers
