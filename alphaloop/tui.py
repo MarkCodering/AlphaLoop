@@ -101,7 +101,7 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/set endpoint",     "Set provider endpoint  · /set endpoint <url>"),
     ("/set key",          "Set provider API key  · /set key <token>"),
     ("/mcp list",         "List connected MCP servers"),
-    ("/mcp add",          "Add MCP server  · /mcp add <name> <url|json-spec>  [transport=http]"),
+    ("/mcp add",          "Add MCP server  · /mcp add <name> <url|json-spec>  [transport=streamable_http]"),
     ("/mcp remove",       "Remove MCP server  · /mcp remove <name>"),
     ("/sandbox",          "Show sandbox status"),
     ("/sandbox on",       "Enable restricted-local sandbox"),
@@ -1385,15 +1385,15 @@ class AlphaLoopApp(App[None]):
             log.write(row)
 
     def _cmd_mcp_add(self, args: list[str]) -> None:
-        """Usage: /mcp add <name> <url|json-spec> [transport=http|sse|stdio]"""
+        """Usage: /mcp add <name> <url|json-spec> [transport=streamable_http|sse|stdio]"""
         if len(args) < 2:  # noqa: PLR2004
             self._append_chat(
                 "sys",
-                "Usage: /mcp add <name> <url|json-spec>  [transport=http]",
+                "Usage: /mcp add <name> <url|json-spec>  [transport=streamable_http]",
             )
             return
         name, payload = args[0], args[1]
-        transport = "http"
+        transport = "streamable_http"
         for a in args[2:]:
             if a.startswith("transport="):
                 transport = a.split("=", 1)[1]
@@ -1806,6 +1806,13 @@ def _write_mcp_file(
 
 def _coerce_mcp_spec(payload: str, default_transport: str) -> dict[str, object]:
     """Parse a server payload from a URL or a JSON object."""
+    aliases = {
+        "http": "streamable_http",
+        "https": "streamable_http",
+        "streamable-http": "streamable_http",
+    }
+
+    default_transport = aliases.get(default_transport.lower(), default_transport)
     payload = payload.strip()
     if not payload:
         raise ValueError("MCP server URL/spec cannot be empty.")
@@ -1825,6 +1832,9 @@ def _coerce_mcp_spec(payload: str, default_transport: str) -> dict[str, object]:
                 spec["transport"] = "stdio"
             elif "url" in spec:
                 spec["transport"] = default_transport
+        elif isinstance(spec.get("transport"), str):
+            t = str(spec["transport"]).lower()
+            spec["transport"] = aliases.get(t, str(spec["transport"]))
         return spec
 
     if payload.startswith("http://") or payload.startswith("https://"):

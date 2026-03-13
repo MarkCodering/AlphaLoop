@@ -14,6 +14,13 @@ from alphaloop.logger import get_logger, log_event
 logger = get_logger(__name__)
 
 
+_TRANSPORT_ALIASES: dict[str, str] = {
+    "http": "streamable_http",
+    "https": "streamable_http",
+    "streamable-http": "streamable_http",
+}
+
+
 def normalize_mcp_connection(spec: Any) -> dict[str, Any]:
     """Normalize one MCP connection spec to the shape expected by the adapter."""
     if not isinstance(spec, dict):
@@ -22,6 +29,11 @@ def normalize_mcp_connection(spec: Any) -> dict[str, Any]:
     normalized = dict(spec)
     if "transport" not in normalized and isinstance(normalized.get("type"), str):
         normalized["transport"] = normalized["type"]
+
+    transport = normalized.get("transport")
+    if isinstance(transport, str):
+        normalized["transport"] = _TRANSPORT_ALIASES.get(transport.lower(), transport)
+
     return normalized
 
 
@@ -100,8 +112,8 @@ async def load_mcp_tools(config: Config, stack: AsyncExitStack) -> list[BaseTool
             "command": "npx",
             "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
           },
-          "myserver": {
-            "transport": "http",
+                    "myserver": {
+                        "transport": "streamable_http",
             "url": "http://localhost:8000/mcp"
           }
         }
@@ -123,19 +135,31 @@ async def load_mcp_tools(config: Config, stack: AsyncExitStack) -> list[BaseTool
 
     from langchain_mcp_adapters.client import MultiServerMCPClient
 
-    try:
-        client = MultiServerMCPClient(authed)
-        # Enter into the caller's stack — keeps all server sessions open until
-        # the agent shuts down.
-        await stack.enter_async_context(client)
-        tools = await client.get_tools()
+    all_tools: list[BaseTool] = []
+    loaded_servers: list[str] = []
+    failed_servers: list[str] = []
+
+    for name, spec in authed.items():
+        try:
+            # Isolate each server so one bad config doesn't block all MCP tools.
+            client = MultiServerMCPClient({name: spec})
+            await stack.enter_async_context(client)
+            tools = await client.get_tools()
+            all_tools.extend(tools)
+            loaded_servers.append(name)
+        except Exception as exc:
+            failed_servers.append(name)
+            logger.error("mcp.load: failed server '%s': %s", name, exc)
+
+    if all_tools:
         log_event(
             logger,
             "mcp.loaded",
-            servers=list(connections.keys()),
-            tools=[t.name for t in tools],
+            servers=loaded_servers,
+            failed=failed_servers,
+            tools=[t.name for t in all_tools],
         )
-        return tools
-    except Exception as exc:
-        logger.error("mcp.load: failed to connect to MCP servers: %s", exc)
-        return []
+    elif failed_servers:
+        logger.error("mcp.load: all configured MCP servers failed: %s", failed_servers)
+
+    return all_tools

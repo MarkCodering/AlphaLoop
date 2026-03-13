@@ -120,7 +120,7 @@ async def test_mcp_add_accepts_quoted_json_spec_and_preserves_wrapper(
 
     assert "mcpServers" in saved
     assert saved["mcpServers"]["existing"]["url"] == "https://mcp.notion.com/mcp"
-    assert saved["mcpServers"]["github"]["transport"] == "http"
+    assert saved["mcpServers"]["github"]["transport"] == "streamable_http"
     assert saved["mcpServers"]["github"]["headers"]["Authorization"] == "Bearer ${input:github_mcp_pat}"
 
 
