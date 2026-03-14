@@ -28,6 +28,14 @@ dev = [
     "pytest-asyncio>=1.1.0",
 ]
 
+# Optional channel dependencies — install only the platforms you need:
+#   uv add 'python-telegram-bot>=21.0'   # Telegram polling bot
+#   uv add aiohttp                        # WhatsApp webhook server
+[project.optional-dependencies]
+telegram = ["python-telegram-bot>=21.0"]
+whatsapp = ["aiohttp>=3.9.0"]
+channels = ["python-telegram-bot>=21.0", "aiohttp>=3.9.0"]
+
 [project.scripts]
 alphaloop = "main:cli"
 

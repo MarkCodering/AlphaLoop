@@ -115,6 +115,42 @@ class Config:
         default_factory=lambda: _default_mcp_config()
     )
 
+    # --- Telegram channel ---
+    # Bot token from @BotFather.  Leave unset to disable the Telegram channel.
+    telegram_bot_token: str | None = field(
+        default_factory=lambda: os.getenv("TELEGRAM_BOT_TOKEN")
+    )
+    # Comma-separated list of numeric chat IDs allowed to use the bot.
+    # Empty means all users are allowed.
+    telegram_allowed_users: list[int] = field(
+        default_factory=lambda: [
+            int(x)
+            for x in os.getenv("TELEGRAM_ALLOWED_USERS", "").split(",")
+            if x.strip()
+        ]
+    )
+
+    # --- WhatsApp channel (Meta Cloud API) ---
+    # Phone Number ID from the Meta developer console.
+    whatsapp_phone_id: str | None = field(
+        default_factory=lambda: os.getenv("WHATSAPP_PHONE_NUMBER_ID")
+    )
+    # Bearer access token for the Meta Graph API.
+    whatsapp_access_token: str | None = field(
+        default_factory=lambda: os.getenv("WHATSAPP_ACCESS_TOKEN")
+    )
+    # Verification token you chose when registering the webhook in Meta's console.
+    whatsapp_verify_token: str | None = field(
+        default_factory=lambda: os.getenv("WHATSAPP_VERIFY_TOKEN")
+    )
+    # Local address and port for the incoming webhook server.
+    whatsapp_webhook_host: str = field(
+        default_factory=lambda: os.getenv("WHATSAPP_WEBHOOK_HOST", "0.0.0.0")
+    )
+    whatsapp_webhook_port: int = field(
+        default_factory=lambda: int(os.getenv("WHATSAPP_WEBHOOK_PORT", "8765"))
+    )
+
     def __post_init__(self) -> None:
         aliases = {
             "google": "gemini",

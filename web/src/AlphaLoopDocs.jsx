@@ -3,6 +3,7 @@ import {
   BookOpen,
   CheckCircle2,
   Github,
+  MessageCircle,
   RefreshCw,
   ShieldCheck,
   Terminal,
@@ -17,6 +18,7 @@ const FEATURE_ROWS = [
   ['Restricted sandbox', 'Uses an allowlist, ulimits, and timeouts to block dangerous local execution patterns.'],
   ['Docker sandbox', 'Supports an ephemeral air-gapped container with RAM and process limits for stronger isolation.'],
   ['Text UI', 'Provides a Textual-based terminal interface with chat history and heartbeat status.'],
+  ['Communication channels', 'Bridges Telegram and WhatsApp to the agent — each user gets their own persistent memory thread.'],
 ];
 
 const CLI_ROWS = [
@@ -24,6 +26,8 @@ const CLI_ROWS = [
   ['tui', 'Launch the interactive terminal UI.'],
   ['send "<msg>"', 'Inject a one-off message and print the reply.'],
   ['status', 'Show the active runtime configuration.'],
+  ['channels start', 'Start all configured communication channels (Telegram, WhatsApp).'],
+  ['channels status', 'Show which channels are configured and their credentials.'],
 ];
 
 const ENV_ROWS = [
@@ -37,6 +41,12 @@ const ENV_ROWS = [
   ['ALPHALOOP_WORK_DIR', '~/.alphaloop/workspace', 'Working directory for the agent.'],
   ['ALPHALOOP_SANDBOX', '0', 'Set to 1 to enable sandboxed execution.'],
   ['ALPHALOOP_SANDBOX_DOCKER', '0', 'Set to 1 to use Docker isolation.'],
+  ['TELEGRAM_BOT_TOKEN', '—', 'Bot token from @BotFather. Required for Telegram channel.'],
+  ['TELEGRAM_ALLOWED_USERS', '—', 'Comma-separated chat IDs. Empty allows all users.'],
+  ['WHATSAPP_PHONE_NUMBER_ID', '—', 'Phone Number ID from the Meta developer console.'],
+  ['WHATSAPP_ACCESS_TOKEN', '—', 'Meta Graph API bearer token for outbound messages.'],
+  ['WHATSAPP_VERIFY_TOKEN', '—', 'Webhook verification secret you choose in Meta console.'],
+  ['WHATSAPP_WEBHOOK_PORT', '8765', 'Local port for the WhatsApp webhook server.'],
 ];
 
 const PROJECT_FILES = [
@@ -46,6 +56,11 @@ const PROJECT_FILES = [
   ['alphaloop/sandbox.py', 'Restricted local sandbox and Docker sandbox backends.'],
   ['alphaloop/tui.py', 'Textual terminal UI.'],
   ['alphaloop/config.py', 'Environment-driven configuration model.'],
+  ['alphaloop/channels/', 'Communication channels package (Telegram, WhatsApp).'],
+  ['alphaloop/channels/base.py', 'Abstract Channel base class and MessageHandler type.'],
+  ['alphaloop/channels/telegram.py', 'Telegram bot channel — polling mode, per-user threads.'],
+  ['alphaloop/channels/whatsapp.py', 'WhatsApp channel — Meta Cloud API with webhook server.'],
+  ['alphaloop/channels/manager.py', 'ChannelManager that starts/stops all configured channels.'],
   ['main.py', 'CLI entry point.'],
   ['run.sh', 'Primary shell launcher.'],
 ];
@@ -226,6 +241,69 @@ ollama pull lfm2.5-thinking:1.2b
                   <div className="px-4 py-4 text-zinc-500">{description}</div>
                 </div>
               ))}
+            </div>
+          </Section>
+
+          <Section
+            eyebrow="Communication Channels"
+            title="Telegram & WhatsApp"
+            description="AlphaLoop can receive messages from Telegram and WhatsApp and reply using the same AI agent. Every platform user gets an independent, persistent memory thread backed by SQLite."
+          >
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="rounded-2xl border border-zinc-900 bg-black/50 p-6">
+                <div className="mb-4 inline-flex items-center gap-3 text-sm font-mono font-bold uppercase tracking-[0.22em] text-zinc-100">
+                  <MessageCircle className="h-4 w-4 text-amber-500" />
+                  Telegram
+                </div>
+                <ul className="space-y-3 text-sm font-mono leading-7 text-zinc-500">
+                  <li>Polling mode — no public URL or webhook needed.</li>
+                  <li>Create a bot with @BotFather, set TELEGRAM_BOT_TOKEN.</li>
+                  <li>Optional allowlist via TELEGRAM_ALLOWED_USERS.</li>
+                  <li>Install: <code className="text-amber-400">uv add 'python-telegram-bot&gt;=21.0'</code></li>
+                </ul>
+              </div>
+              <div className="rounded-2xl border border-zinc-900 bg-black/50 p-6">
+                <div className="mb-4 inline-flex items-center gap-3 text-sm font-mono font-bold uppercase tracking-[0.22em] text-zinc-100">
+                  <MessageCircle className="h-4 w-4 text-emerald-400" />
+                  WhatsApp
+                </div>
+                <ul className="space-y-3 text-sm font-mono leading-7 text-zinc-500">
+                  <li>Meta WhatsApp Business Cloud API (free tier).</li>
+                  <li>Runs a local webhook server on port 8765 (configurable).</li>
+                  <li>Expose publicly with ngrok for local development.</li>
+                  <li>Install: <code className="text-amber-400">uv add aiohttp</code></li>
+                </ul>
+              </div>
+            </div>
+            <div className="mt-6 space-y-4">
+              <CodeBlock>{`# Telegram — set token and start
+export TELEGRAM_BOT_TOKEN=7123456789:AAF...
+alphaloop channels start
+
+# WhatsApp — set Meta credentials, expose webhook, start
+export WHATSAPP_PHONE_NUMBER_ID=12345678901234
+export WHATSAPP_ACCESS_TOKEN=EAA...
+export WHATSAPP_VERIFY_TOKEN=my-secret-token
+ngrok http 8765   # register the HTTPS URL in Meta console
+alphaloop channels start
+
+# Check what is configured
+alphaloop channels status`}</CodeBlock>
+              <div className="rounded-2xl border border-zinc-900 bg-black/50 p-5">
+                <div className="mb-3 text-xs font-mono font-bold uppercase tracking-[0.22em] text-zinc-400">TUI commands</div>
+                <div className="grid gap-2 text-sm font-mono">
+                  {[
+                    ['/channels', 'List configured channels and their status.'],
+                    ['/channels start <name>', 'Start a specific channel (telegram or whatsapp).'],
+                    ['/channels stop <name>', 'Stop a running channel.'],
+                  ].map(([cmd, desc]) => (
+                    <div key={cmd} className="flex items-start gap-4 border-b border-zinc-900 pb-2 last:border-b-0">
+                      <span className="min-w-[220px] text-amber-400">{cmd}</span>
+                      <span className="text-zinc-500">{desc}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </Section>
 

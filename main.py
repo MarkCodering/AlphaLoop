@@ -134,6 +134,136 @@ def tui(provider: str | None, model: str | None, interval: float | None, thread:
     AlphaLoopApp(config=cfg).run()
 
 
+@cli.group()
+def channels() -> None:
+    """Manage communication channels (Telegram, WhatsApp)."""
+
+
+@channels.command("start")
+@click.option("--thread-prefix", default="channel", show_default=True, help="Thread ID prefix for channel users")
+def channels_start(thread_prefix: str) -> None:  # noqa: ARG001
+    """Start all configured communication channels (blocks until Ctrl-C).
+
+    Reads credentials from environment variables:
+
+    \b
+    Telegram
+      TELEGRAM_BOT_TOKEN          Bot token from @BotFather
+      TELEGRAM_ALLOWED_USERS      Comma-separated chat IDs (optional)
+
+    \b
+    WhatsApp (Meta Cloud API)
+      WHATSAPP_PHONE_NUMBER_ID    Phone Number ID from Meta console
+      WHATSAPP_ACCESS_TOKEN       Graph API bearer token
+      WHATSAPP_VERIFY_TOKEN       Webhook verification secret
+      WHATSAPP_WEBHOOK_PORT       Local webhook port (default: 8765)
+    """
+    from alphaloop.agent import create_agent, invoke_agent
+    from alphaloop.channels import ChannelManager
+    from alphaloop.config import Config
+    from alphaloop.logger import setup_logging
+
+    cfg = Config()
+    setup_logging(cfg.log_level)
+
+    async def _handler(channel_name: str, user_id: str, message: str) -> str:
+        graph, _, stack = await create_agent(cfg)
+        try:
+            thread_id = user_id  # already scoped e.g. "telegram-12345"
+            return await invoke_agent(graph, message, thread_id)
+        finally:
+            await stack.aclose()
+
+    async def _run() -> None:
+        manager = ChannelManager(cfg, _handler)
+        names = manager.channel_names()
+        if not names:
+            console.print(
+                "[yellow]No channels configured.[/yellow]\n"
+                "Set TELEGRAM_BOT_TOKEN and/or WHATSAPP_* environment variables."
+            )
+            return
+
+        console.print(f"[bold green]Starting channels:[/bold green] {', '.join(names)}")
+        await manager.start_all()
+
+        try:
+            import asyncio as _asyncio
+            while True:
+                await _asyncio.sleep(1)
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            pass
+        finally:
+            await manager.stop_all()
+            console.print("[yellow]Channels stopped.[/yellow]")
+
+    try:
+        asyncio.run(_run())
+    except KeyboardInterrupt:
+        console.print("[yellow]Stopped.[/yellow]")
+
+
+@channels.command("status")
+def channels_status() -> None:
+    """Show configured communication channels and their credentials."""
+    from alphaloop.config import Config
+
+    cfg = Config()
+
+    table = Table(title="Communication Channels", show_header=True)
+    table.add_column("Channel", style="bold cyan")
+    table.add_column("Platform")
+    table.add_column("Configured")
+    table.add_column("Details")
+
+    # Telegram
+    if cfg.telegram_bot_token:
+        token_preview = cfg.telegram_bot_token[:8] + "…"
+        users = (
+            ", ".join(str(u) for u in cfg.telegram_allowed_users)
+            if cfg.telegram_allowed_users
+            else "all users"
+        )
+        table.add_row(
+            "telegram",
+            "Telegram Bot API",
+            "[green]yes[/green]",
+            f"token={token_preview}  allowed={users}",
+        )
+    else:
+        table.add_row(
+            "telegram",
+            "Telegram Bot API",
+            "[bright_black]no[/bright_black]",
+            "Set TELEGRAM_BOT_TOKEN to enable",
+        )
+
+    # WhatsApp
+    if cfg.whatsapp_phone_id and cfg.whatsapp_access_token and cfg.whatsapp_verify_token:
+        table.add_row(
+            "whatsapp",
+            "Meta Cloud API",
+            "[green]yes[/green]",
+            f"phone_id={cfg.whatsapp_phone_id}  port={cfg.whatsapp_webhook_port}",
+        )
+    else:
+        missing = []
+        if not cfg.whatsapp_phone_id:
+            missing.append("WHATSAPP_PHONE_NUMBER_ID")
+        if not cfg.whatsapp_access_token:
+            missing.append("WHATSAPP_ACCESS_TOKEN")
+        if not cfg.whatsapp_verify_token:
+            missing.append("WHATSAPP_VERIFY_TOKEN")
+        table.add_row(
+            "whatsapp",
+            "Meta Cloud API",
+            "[bright_black]no[/bright_black]",
+            f"Missing: {', '.join(missing)}",
+        )
+
+    console.print(table)
+
+
 @cli.command()
 def status() -> None:
     """Show current AlphaLoop configuration."""

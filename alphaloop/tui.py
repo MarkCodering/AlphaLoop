@@ -120,6 +120,9 @@ _COMMANDS: list[tuple[str, str]] = [
     ("/export",           "Open full conversation in a selectable text view"),
     ("/thread",           "Show current thread ID"),
     ("/tips",             "Show productivity shortcuts"),
+    ("/channels",         "List configured communication channels"),
+    ("/channels start",   "Start a channel  · /channels start <telegram|whatsapp>"),
+    ("/channels stop",    "Stop a channel   · /channels stop <telegram|whatsapp>"),
 ]
 
 
@@ -157,14 +160,15 @@ class AppHeader(Static):
 
 
 class StatusBar(Static):
-    """Live heartbeat + sandbox + MCP state."""
+    """Live heartbeat + sandbox + MCP + channel state."""
 
-    healthy:  reactive[bool]  = reactive(True)
-    tick:     reactive[int]   = reactive(0)
-    uptime:   reactive[float] = reactive(100.0)
-    failures: reactive[int]   = reactive(0)
-    mcp_count: reactive[int]  = reactive(0)
-    mcp_tools: reactive[int]  = reactive(0)
+    healthy:   reactive[bool]  = reactive(True)
+    tick:      reactive[int]   = reactive(0)
+    uptime:    reactive[float] = reactive(100.0)
+    failures:  reactive[int]   = reactive(0)
+    mcp_count: reactive[int]   = reactive(0)
+    mcp_tools: reactive[int]   = reactive(0)
+    channels:  reactive[int]   = reactive(0)
 
     def __init__(self, config: Config, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -194,6 +198,11 @@ class StatusBar(Static):
                 t.append("0", style="bright_red")
         else:
             t.append("none", style="bright_black")
+        t.append("  │  ch=", style="bright_black")
+        if self.channels:
+            t.append(str(self.channels), style="bright_green")
+        else:
+            t.append("0", style="bright_black")
         return t
 
 
@@ -1146,6 +1155,12 @@ class AlphaLoopApp(App[None]):
             self._cmd_sandbox_set(enabled=True, docker=False)
         elif cmd == "/sandbox":
             self._cmd_sandbox()
+        elif two == "/channels start":
+            self._cmd_channels_start(parts[2] if len(parts) > 2 else "")
+        elif two == "/channels stop":
+            self._cmd_channels_stop(parts[2] if len(parts) > 2 else "")
+        elif cmd == "/channels":
+            self._cmd_channels_list()
         else:
             self._append_chat("sys", self._suggest_unknown_command(text))
 
@@ -1232,6 +1247,88 @@ class AlphaLoopApp(App[None]):
             label = "restricted-local (allowlist + ulimits)"
         self._append_chat("sys", f"Sandbox → {label} — restarting…")
         self.post_message(AgentRestart())
+
+    # ------------------------------------------------------------------
+    # /channels commands
+    # ------------------------------------------------------------------
+
+    def _cmd_channels_list(self) -> None:
+        runner = getattr(self, "_runner", None)
+        mgr = getattr(runner, "_channel_manager", None) if runner else None
+        if mgr is None:
+            self._append_chat("sys", "Channel manager not available — agent may still be booting.")
+            return
+        names = mgr.channel_names()
+        if not names:
+            self._append_chat(
+                "sys",
+                "No channels configured.\n"
+                "Set TELEGRAM_BOT_TOKEN and/or WHATSAPP_* environment variables, "
+                "then restart.",
+            )
+            return
+        log = self.query_one("#chat-log", ChatLog)
+        t = Text()
+        t.append("Communication Channels\n", style="bold white")
+        for st in mgr.statuses():
+            icon = "●" if st.running else "○"
+            color = "bright_green" if st.running else "bright_black"
+            t.append(f"  {icon} ", style=color)
+            t.append(st.name, style="cyan")
+            t.append(f" [{st.platform}]", style="bright_black")
+            t.append(f"  rx={st.messages_received} tx={st.messages_sent}", style="white")
+            if st.last_error:
+                t.append(f"  err={st.last_error[:60]}", style="bright_red")
+            t.append("\n")
+        log.write(t)
+
+    @work(exclusive=False, thread=False)
+    async def _cmd_channels_start(self, name: str) -> None:
+        runner = getattr(self, "_runner", None)
+        mgr = getattr(runner, "_channel_manager", None) if runner else None
+        if mgr is None:
+            self._append_chat("sys", "Channel manager not ready.")
+            return
+        if not name:
+            # Start all
+            names = mgr.channel_names()
+            if not names:
+                self._append_chat("sys", "No channels configured.")
+                return
+            for n in names:
+                await mgr.start_channel(n)
+            status_bar = self.query_one("#status-bar", StatusBar)
+            status_bar.channels = sum(1 for s in mgr.statuses() if s.running)
+            self._append_chat("sys", f"Started: {', '.join(names)}")
+        else:
+            ok = await mgr.start_channel(name)
+            if ok:
+                status_bar = self.query_one("#status-bar", StatusBar)
+                status_bar.channels = sum(1 for s in mgr.statuses() if s.running)
+                self._append_chat("sys", f"Channel '{name}' started.")
+            else:
+                self._append_chat("sys", f"Channel '{name}' not found. Use /channels to list.")
+
+    @work(exclusive=False, thread=False)
+    async def _cmd_channels_stop(self, name: str) -> None:
+        runner = getattr(self, "_runner", None)
+        mgr = getattr(runner, "_channel_manager", None) if runner else None
+        if mgr is None:
+            self._append_chat("sys", "Channel manager not ready.")
+            return
+        if not name:
+            await mgr.stop_all()
+            status_bar = self.query_one("#status-bar", StatusBar)
+            status_bar.channels = 0
+            self._append_chat("sys", "All channels stopped.")
+        else:
+            ok = await mgr.stop_channel(name)
+            if ok:
+                status_bar = self.query_one("#status-bar", StatusBar)
+                status_bar.channels = sum(1 for s in mgr.statuses() if s.running)
+                self._append_chat("sys", f"Channel '{name}' stopped.")
+            else:
+                self._append_chat("sys", f"Channel '{name}' not found.")
 
     def _cmd_restart(self) -> None:
         self._append_chat("sys", "Restarting agent…")
@@ -1879,6 +1976,7 @@ class _BackgroundRunner:
         self._agent_stack = None
         self._monitor: HeartbeatMonitor | None = None
         self._hb_task:  asyncio.Task | None    = None
+        self._channel_manager = None
 
     def start_all(self) -> None:
         self._app.run_worker(self._boot(), exclusive=False, name="agent-boot")
@@ -1931,6 +2029,25 @@ class _BackgroundRunner:
         self._monitor = _TuiHeartbeatMonitor(graph, self._cfg, self._app)
         self._hb_task = asyncio.create_task(self._monitor.run(), name="hb")
 
+        # Build channel manager (channels only start on explicit /channels start)
+        from alphaloop.channels import ChannelManager
+        from alphaloop.agent import invoke_agent as _invoke
+
+        async def _channel_handler(channel_name: str, user_id: str, message: str) -> str:
+            if self._graph is None:
+                return "(agent not ready)"
+            return await _invoke(self._graph, message, user_id)
+
+        self._channel_manager = ChannelManager(self._cfg, _channel_handler)
+        ch_names = self._channel_manager.channel_names()
+        status_bar = self._app.query_one("#status-bar", StatusBar)
+        status_bar.channels = 0
+        if ch_names:
+            self._app.post_message(StatusUpdate(
+                f"Channels configured: {', '.join(ch_names)} — use /channels start to activate",
+                level="info",
+            ))
+
     async def send(self, message: str) -> str:
         if self._graph is None:
             return "(agent not ready)"
@@ -1938,6 +2055,9 @@ class _BackgroundRunner:
         return await invoke_agent(self._graph, message, self._cfg.thread_id)
 
     async def stop(self) -> None:
+        if self._channel_manager is not None:
+            await self._channel_manager.stop_all()
+            self._channel_manager = None
         if self._monitor:
             self._monitor.stop()
         if self._hb_task:
