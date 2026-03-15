@@ -1849,7 +1849,9 @@ class AlphaLoopApp(App[None]):
         self._recent_messages.append((speaker, text))
         self._write_chat_line(self.query_one("#chat-log", ChatLog), speaker, text)
 
-    def _write_chat_line(self, log: RichLog, speaker: str, text: str) -> None:
+    def _write_chat_line(
+        self, log: RichLog, speaker: str, text: str, *, streaming: bool = False
+    ) -> None:
         style, label = self._SPEAKER_STYLE.get(speaker, ("white", speaker.upper()))
         ts = time.strftime("%H:%M:%S")
 
@@ -1860,35 +1862,56 @@ class AlphaLoopApp(App[None]):
         header.append(label,  style=style)
         log.write(header)
 
-        if speaker in self._MARKDOWN_SPEAKERS and text not in ("…", "(no reply)"):
+        render_markdown = (
+            speaker in self._MARKDOWN_SPEAKERS
+            and text not in ("…", "(no reply)")
+            and not streaming
+        )
+        if render_markdown:
             # Render body as Markdown, indented 2 spaces to align under the label
             md = Markdown(text, code_theme="monokai", hyperlinks=False)
             log.write(Padding(md, pad=(0, 0, 1, 2)))
         else:
-            # Plain text for user input, sys messages, and placeholders
+            # Plain text for user input, sys messages, placeholders, and streaming
             body = Text(no_wrap=False)
             body.append("  ")
             body.append(text, style="white" if speaker != "sys" else "bright_black")
             body.append("\n")
             log.write(body)
 
-    def _rebuild_chat(self, replace_last: tuple[str, str] | None = None) -> None:
+    def _rebuild_chat(
+        self,
+        replace_last: tuple[str, str] | None = None,
+        *,
+        streaming: bool = False,
+    ) -> None:
         log = self.query_one("#chat-log", ChatLog)
         log.clear()
         messages = list(self._recent_messages)
         if replace_last and messages:
             messages[-1] = replace_last
             self._recent_messages[-1] = replace_last
-        for speaker, text in messages:
-            self._write_chat_line(log, speaker, text)
+        for i, (speaker, text) in enumerate(messages):
+            is_streaming = streaming and i == len(messages) - 1
+            self._write_chat_line(log, speaker, text, streaming=is_streaming)
 
     @work(exclusive=False)
     async def _send_message(self, text: str) -> None:
         if self._runner is None:
             return
         self._append_chat("agent", "…")
-        reply = await self._runner.send(text)
-        self._rebuild_chat(replace_last=("agent", reply or "(no reply)"))
+        accumulated = ""
+        chunk_count = 0
+        async for chunk in self._runner.stream(text):
+            accumulated += chunk
+            chunk_count += 1
+            # Batch updates: redraw every 5 chunks to reduce flicker
+            if chunk_count % 5 == 0:
+                self._rebuild_chat(
+                    replace_last=("agent", accumulated), streaming=True
+                )
+        # Final render with full Markdown formatting
+        self._rebuild_chat(replace_last=("agent", accumulated or "(no reply)"))
 
 
 # ---------------------------------------------------------------------------
@@ -2053,6 +2076,14 @@ class _BackgroundRunner:
             return "(agent not ready)"
         from alphaloop.agent import invoke_agent
         return await invoke_agent(self._graph, message, self._cfg.thread_id)
+
+    async def stream(self, message: str):  # AsyncIterator[str]
+        if self._graph is None:
+            yield "(agent not ready)"
+            return
+        from alphaloop.agent import stream_agent
+        async for chunk in stream_agent(self._graph, message, self._cfg.thread_id):
+            yield chunk
 
     async def stop(self) -> None:
         if self._channel_manager is not None:

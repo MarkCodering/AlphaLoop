@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -194,6 +195,42 @@ async def invoke_agent(
         if part.strip():
             return part.strip()
     return ""
+
+
+async def stream_agent(
+    graph: CompiledStateGraph,
+    message: str,
+    thread_id: str,
+) -> AsyncIterator[str]:
+    """Stream text tokens from the agent as they are generated.
+
+    Yields incremental text chunks. The caller should accumulate them to build
+    the full reply. Tool-call chunks are silently skipped.
+
+    Args:
+        graph: Compiled agent graph.
+        message: User message to send.
+        thread_id: Conversation thread to use (enables persistence).
+
+    Yields:
+        Incremental text strings from the AI response.
+    """
+    config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
+    input_state = {"messages": [HumanMessage(content=message)]}
+
+    try:
+        async for chunk, _metadata in graph.astream(
+            input_state, config=config, stream_mode="messages"
+        ):
+            content = getattr(chunk, "content", "")
+            if not isinstance(content, str) or not content:
+                continue
+            # Skip tool-call chunks — only yield plain AI text
+            if getattr(chunk, "tool_calls", None) or getattr(chunk, "tool_call_chunks", None):
+                continue
+            yield content
+    except Exception as exc:
+        logger.exception("agent.stream failed: %s", exc)
 
 
 async def ping_agent(graph: CompiledStateGraph, thread_id: str) -> bool:
