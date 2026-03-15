@@ -841,6 +841,13 @@ class AlphaLoopApp(App[None]):
     #chat-log:focus {{
         border: solid {_AMBER};
     }}
+    #streaming-panel {{
+        display: none;
+        height: auto;
+        background: {_DARK};
+        padding: 0 1;
+        border-top: solid {_BORDER};
+    }}
 
     /* ── Sidebar ── */
     #sidebar {{
@@ -948,6 +955,7 @@ class AlphaLoopApp(App[None]):
             with Vertical(id="chat-panel"):
                 yield Static("  CHAT", id="chat-header")
                 yield ChatLog(id="chat-log", highlight=False, markup=False, wrap=True)
+                yield Static("", id="streaming-panel")
             with Vertical(id="sidebar"):
                 yield HbStats(id="hb-stats")
                 yield Static("  HEARTBEAT LOG", id="sidebar-log-header")
@@ -1693,12 +1701,18 @@ class AlphaLoopApp(App[None]):
         self.query_one("#app-header", AppHeader).refresh()
         self._recent_messages.clear()
         self.query_one("#chat-log", ChatLog).clear()
+        sp = self.query_one("#streaming-panel", Static)
+        sp.display = False
+        sp.update("")
         self._append_chat("sys", f"Started new session (thread={self._cfg.thread_id}). MCP servers remain attached. Restarting agent…")
         self.post_message(AgentRestart())
 
     def action_clear_chat(self) -> None:
         self._recent_messages.clear()
         self.query_one("#chat-log", ChatLog).clear()
+        sp = self.query_one("#streaming-panel", Static)
+        sp.display = False
+        sp.update("")
 
     def action_open_models(self) -> None:
         self._open_model_picker()
@@ -1895,23 +1909,42 @@ class AlphaLoopApp(App[None]):
             is_streaming = streaming and i == len(messages) - 1
             self._write_chat_line(log, speaker, text, streaming=is_streaming)
 
+    def _render_streaming_panel(self, panel: Static, text: str) -> None:
+        """Write live streaming text + cursor into the streaming panel widget."""
+        style, label = self._SPEAKER_STYLE["agent"]
+        ts = time.strftime("%H:%M:%S")
+        content = Text(no_wrap=False)
+        content.append(ts, style="bright_black")
+        content.append("  ")
+        content.append(label, style=style)
+        content.append("\n  ")
+        content.append(text, style="white")
+        content.append("▊", style="bold bright_green")
+        panel.update(content)
+
     @work(exclusive=False)
     async def _send_message(self, text: str) -> None:
         if self._runner is None:
             return
-        self._append_chat("agent", "…")
+        streaming_panel = self.query_one("#streaming-panel", Static)
         accumulated = ""
-        chunk_count = 0
+        last_update = 0.0
+
+        # Show the streaming panel immediately with an empty cursor
+        streaming_panel.display = True
+        self._render_streaming_panel(streaming_panel, "")
+
         async for chunk in self._runner.stream(text):
             accumulated += chunk
-            chunk_count += 1
-            # Batch updates: redraw every 5 chunks to reduce flicker
-            if chunk_count % 5 == 0:
-                self._rebuild_chat(
-                    replace_last=("agent", accumulated), streaming=True
-                )
-        # Final render with full Markdown formatting
-        self._rebuild_chat(replace_last=("agent", accumulated or "(no reply)"))
+            now = time.monotonic()
+            if now - last_update >= 0.05:  # cap redraws at ~20 fps
+                last_update = now
+                self._render_streaming_panel(streaming_panel, accumulated)
+
+        # Hide the streaming panel and write the final formatted message
+        streaming_panel.display = False
+        streaming_panel.update("")
+        self._append_chat("agent", accumulated or "(no reply)")
 
 
 # ---------------------------------------------------------------------------
